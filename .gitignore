@@ -1,0 +1,9 @@
+.idea
+build
+rust_game/target
+
+# Built binaries and metadata
+*.elf
+*.lst
+*.nacp
+*.nro
