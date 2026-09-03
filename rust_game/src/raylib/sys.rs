@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 
-use core::ffi::{c_char, c_int};
+use core::ffi::{c_char, c_float, c_int};
 
 use super::{Color, Rect, Vec2};
 
@@ -17,6 +17,9 @@ unsafe extern "C" {
 
     pub fn WindowShouldClose() -> bool;
     pub fn IsWindowReady() -> bool;
+
+    // Random
+    pub fn GetRandomValue(min: c_int, max: c_int) -> c_int;
 
     // Timing
     pub fn SetTargetFPS(fps: c_int);
@@ -39,6 +42,13 @@ unsafe extern "C" {
     pub fn DrawRectangleRec(
         rect: Rect,
         color: Color,
+    );
+
+    pub fn DrawRectanglePro(
+        rect: Rect,
+        origin: Vec2,
+        rotation: c_float,
+        color: Color
     );
 
     pub fn DrawCircleV(

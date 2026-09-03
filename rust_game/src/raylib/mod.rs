@@ -104,6 +104,19 @@ impl Mul<f32> for Vec2 {
     }
 }
 
+impl Into<Vec2> for (f32, f32) {
+    fn into(self) -> Vec2 {
+        Vec2::new(self.0, self.1)
+    }
+}
+
+impl Into<Vec2> for (usize, usize) {
+    fn into(self) -> Vec2 {
+        Vec2::new(self.0 as f32, self.1 as f32)
+    }
+}
+
+
 impl MulAssign<f32> for Vec2 {
     fn mul_assign(&mut self, rhs: f32) {
         self.x *= rhs;
@@ -193,6 +206,14 @@ impl Color {
         a: u8,
     ) -> Self {
         Self { r, g, b, a }
+    }
+
+    pub fn with_alpha(&self, a: u8) -> Self {
+        Self { r: self.r, g: self.g, b: self.b, a}
+    }
+
+    pub fn darken(&self, amount: u8) -> Self {
+        Self { r: self.r - amount, g: self.g - amount, b: self.b - amount, a: self.a }
     }
 
     pub const WHITE: Self = Self::rgb(255, 255, 255);
@@ -299,9 +320,8 @@ pub struct Gamepad {
 }
 
 impl Gamepad {
-    fn new(id: i32) -> Self {
-        Self { id }
-    }
+    pub fn new() -> Self { Self::new_by_id(0) }
+    pub fn new_by_id(id: i32) -> Self { Self { id } }
 
     pub fn available(self) -> bool {
         unsafe {
@@ -442,10 +462,6 @@ impl App {
         }
     }
 
-    pub fn gamepad(&self, index: i32) -> Gamepad {
-        Gamepad::new(index)
-    }
-
     pub fn begin_frame(
         &mut self,
         clear: Color,
@@ -516,6 +532,27 @@ impl Frame<'_> {
         }
     }
 
+    /// This is different from plain DrawRectanglePro call, because origin is set via
+    /// applying relative coordinates (i.e. 0 -> 1), instead of raw pixel values
+    pub fn rect_rotation(
+        &mut self,
+        rect: Rect,
+        origin: Vec2,
+        rotation: f32,
+        color: Color,
+    ) {
+        let origin = Vec2::new(origin.x * rect.width, origin.y * rect.height);
+
+        unsafe {
+            sys::DrawRectanglePro(
+                rect,
+                origin,
+                rotation,
+                color,
+            )
+        }
+    }
+
     pub fn circle(
         &mut self,
         center: Vec2,
@@ -576,5 +613,14 @@ impl Drop for Frame<'_> {
         unsafe {
             sys::EndDrawing();
         }
+    }
+}
+
+// ============================================================
+// Random
+// ============================================================
+pub fn get_random_value(min: i32, max: i32) -> i32 {
+    unsafe {
+        sys::GetRandomValue(min, max)
     }
 }
