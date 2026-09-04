@@ -40,7 +40,7 @@ pub extern "C" fn rust_main() -> c_int {
         let dt = app.delta_time();
 
         let mut frame =
-            app.begin_frame(Color::BLACK);
+            app.begin_frame(Color::rgb(10, 10, 10));
 
         game.process(dt);
         game.draw(&mut frame);

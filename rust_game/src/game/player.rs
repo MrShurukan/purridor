@@ -27,6 +27,8 @@ pub struct Player {
     x: usize,
     y: usize,
     side: PlayerSide,
+
+    available_walls: usize,
 }
 
 const PAWN_RADIUS: f32 = 20.0;
@@ -38,7 +40,9 @@ impl Player {
             x: 4,
             // White starts on the bottom, black on top
             y: if let PlayerSide::White = side { TILES_DIM - 1 } else { 0 },
-            side
+            side,
+
+            available_walls: 20,
         }
     }
 
