@@ -1,9 +1,10 @@
 mod sys;
 
-use alloc::vec::Vec;
+use alloc::ffi::CString;
 
+use crate::game::SCREEN_WIDTH;
 use core::{
-    ffi::c_char,
+    ffi::{c_int, CStr},
     marker::PhantomData,
     ops::{
         Add,
@@ -18,7 +19,6 @@ use core::{
         Ordering,
     },
 };
-use core::ffi::c_int;
 // ============================================================
 // Math
 // ============================================================
@@ -116,6 +116,11 @@ impl Into<Vec2> for (usize, usize) {
     }
 }
 
+impl Into<Vec2> for (i32, i32) {
+    fn into(self) -> Vec2 {
+        Vec2::new(self.0 as f32, self.1 as f32)
+    }
+}
 
 impl MulAssign<f32> for Vec2 {
     fn mul_assign(&mut self, rhs: f32) {
@@ -237,44 +242,6 @@ impl Color {
     pub const RAY_WHITE: Self =
         Self::rgb(245, 245, 245);
 }
-
-
-// ============================================================
-// C string helper
-// ============================================================
-
-pub struct Text {
-    bytes: Vec<u8>,
-}
-
-impl Text {
-    pub fn new(text: &str) -> Self {
-        let mut bytes =
-            Vec::with_capacity(text.len() + 1);
-
-        // C strings cannot contain embedded NUL.
-        // Replacing it is much nicer for a sketch/game API
-        // than panicking.
-        for byte in text.bytes() {
-            bytes.push(
-                if byte == 0 {
-                    b'?'
-                } else {
-                    byte
-                }
-            );
-        }
-
-        bytes.push(0);
-
-        Self { bytes }
-    }
-
-    fn as_ptr(&self) -> *const c_char {
-        self.bytes.as_ptr().cast()
-    }
-}
-
 
 // ============================================================
 // Input
@@ -418,13 +385,13 @@ impl App {
             return Err(AppError::AlreadyInitialized);
         }
 
-        let title = Text::new(title);
+        let c_str = CString::new(title).unwrap();
 
         unsafe {
             sys::InitWindow(
                 width as c_int,
                 height as c_int,
-                title.as_ptr(),
+                c_str.as_ptr(),
             );
         }
 
@@ -499,6 +466,11 @@ pub struct Frame<'app> {
     // Makes Rust think we are borrowing an app when we create a frame
     // This prevents us from creating another frame before we drop previous one
     _app: PhantomData<&'app mut App>,
+}
+
+pub enum TextEdgeAlignment {
+    Left,
+    Right,
 }
 
 impl Frame<'_> {
@@ -578,10 +550,10 @@ impl Frame<'_> {
         size: i32,
         color: Color,
     ) {
-        let text = Text::new(text);
+        let c_str = CString::new(text).unwrap();
 
-        self.prepared_text(
-            &text,
+        self.const_text(
+            &c_str,
             position,
             size,
             color,
@@ -589,9 +561,9 @@ impl Frame<'_> {
     }
 
     /// Allocation-free version for persistent/static text.
-    pub fn prepared_text(
+    pub fn const_text(
         &mut self,
-        text: &Text,
+        text: &CStr,
         position: Vec2,
         size: i32,
         color: Color,
@@ -605,6 +577,60 @@ impl Frame<'_> {
                 color,
             );
         }
+    }
+
+    pub fn measure_text(
+        &self,
+        text: &str,
+        size: i32,
+    ) -> i32 {
+        let c_str = CString::new(text).unwrap();
+
+        self.measure_const_text(&c_str, size)
+    }
+
+    pub fn measure_const_text(
+        &self,
+        text: &CStr,
+        size: i32,
+    ) -> i32 {
+        unsafe {
+            sys::MeasureText(
+                text.as_ptr(),
+                size as c_int,
+            )
+        }
+    }
+
+    pub fn text_pro(
+        &mut self,
+        text: &str,
+        size: i32,
+        text_edge_alignment: TextEdgeAlignment,
+        horizontal_offset: i32,
+        y: i32,
+        color: Color,
+    ) {
+        let c_str = CString::new(text).unwrap();
+
+        self.const_text_pro(&c_str, size, text_edge_alignment, horizontal_offset, y, color);
+    }
+
+    pub fn const_text_pro(
+        &mut self,
+        text: &CStr,
+        size: i32,
+        text_edge_alignment: TextEdgeAlignment,
+        horizontal_offset: i32,
+        y: i32,
+        color: Color,
+    ) {
+        let x = match text_edge_alignment {
+            TextEdgeAlignment::Left => horizontal_offset,
+            TextEdgeAlignment::Right => SCREEN_WIDTH as i32 - self.measure_const_text(&text, size) - horizontal_offset
+        };
+
+        self.const_text(&text, (x, y).into(), size, color)
     }
 }
 

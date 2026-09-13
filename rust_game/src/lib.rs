@@ -14,7 +14,6 @@ use raylib::{
     Button,
     Color,
     Rect,
-    Text,
     Vec2,
 };
 use crate::game::{SCREEN_HEIGHT, SCREEN_WIDTH};

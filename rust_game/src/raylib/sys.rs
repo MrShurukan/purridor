@@ -66,6 +66,11 @@ unsafe extern "C" {
         color: Color,
     );
 
+    pub fn MeasureText(
+        text: *const c_char,
+        font_size: c_int,
+    ) -> c_int;
+
     // Gamepad
     pub fn IsGamepadAvailable(gamepad: c_int) -> bool;
 

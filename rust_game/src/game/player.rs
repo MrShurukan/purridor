@@ -28,7 +28,7 @@ pub struct Player {
     y: usize,
     side: PlayerSide,
 
-    available_walls: usize,
+    pub available_walls: usize,
 }
 
 const PAWN_RADIUS: f32 = 20.0;
