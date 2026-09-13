@@ -2,7 +2,6 @@ mod sys;
 
 use alloc::ffi::CString;
 
-use crate::game::SCREEN_WIDTH;
 use core::{
     ffi::{c_int, CStr},
     marker::PhantomData,
@@ -104,21 +103,21 @@ impl Mul<f32> for Vec2 {
     }
 }
 
-impl Into<Vec2> for (f32, f32) {
-    fn into(self) -> Vec2 {
-        Vec2::new(self.0, self.1)
+impl From<(f32, f32)> for Vec2 {
+    fn from((x, y): (f32, f32)) -> Self {
+        Vec2::new(x, y)
     }
 }
 
-impl Into<Vec2> for (usize, usize) {
-    fn into(self) -> Vec2 {
-        Vec2::new(self.0 as f32, self.1 as f32)
+impl From<(usize, usize)> for Vec2 {
+    fn from((x, y): (usize, usize)) -> Self {
+        Vec2::new(x as f32, y as f32)
     }
 }
 
-impl Into<Vec2> for (i32, i32) {
-    fn into(self) -> Vec2 {
-        Vec2::new(self.0 as f32, self.1 as f32)
+impl From<(i32, i32)> for Vec2 {
+    fn from((x, y): (i32, i32)) -> Self {
+        Vec2::new(x as f32, y as f32)
     }
 }
 
@@ -213,12 +212,17 @@ impl Color {
         Self { r, g, b, a }
     }
 
-    pub fn with_alpha(&self, a: u8) -> Self {
+    pub const fn with_alpha(self, a: u8) -> Self {
         Self { r: self.r, g: self.g, b: self.b, a}
     }
 
-    pub fn darken(&self, amount: u8) -> Self {
-        Self { r: self.r - amount, g: self.g - amount, b: self.b - amount, a: self.a }
+    pub const fn darken(self, amount: u8) -> Self {
+        Self {
+            r: self.r.saturating_sub(amount),
+            g: self.g.saturating_sub(amount),
+            b: self.b.saturating_sub(amount),
+            a: self.a
+        }
     }
 
     pub const WHITE: Self = Self::rgb(255, 255, 255);
@@ -468,11 +472,6 @@ pub struct Frame<'app> {
     _app: PhantomData<&'app mut App>,
 }
 
-pub enum TextEdgeAlignment {
-    Left,
-    Right,
-}
-
 impl Frame<'_> {
     pub fn line(
         &mut self,
@@ -602,33 +601,30 @@ impl Frame<'_> {
         }
     }
 
-    pub fn text_pro(
+    pub fn text_right_align(
         &mut self,
         text: &str,
         size: i32,
-        text_edge_alignment: TextEdgeAlignment,
+        right_align_border: usize,
         horizontal_offset: i32,
         y: i32,
         color: Color,
     ) {
         let c_str = CString::new(text).unwrap();
 
-        self.const_text_pro(&c_str, size, text_edge_alignment, horizontal_offset, y, color);
+        self.const_text_right_align(&c_str, size, right_align_border, horizontal_offset, y, color);
     }
 
-    pub fn const_text_pro(
+    pub fn const_text_right_align(
         &mut self,
         text: &CStr,
         size: i32,
-        text_edge_alignment: TextEdgeAlignment,
+        right_align_border: usize,
         horizontal_offset: i32,
         y: i32,
         color: Color,
     ) {
-        let x = match text_edge_alignment {
-            TextEdgeAlignment::Left => horizontal_offset,
-            TextEdgeAlignment::Right => SCREEN_WIDTH as i32 - self.measure_const_text(&text, size) - horizontal_offset
-        };
+        let x = right_align_border as i32 - self.measure_const_text(&text, size) - horizontal_offset;
 
         self.const_text(&text, (x, y).into(), size, color)
     }

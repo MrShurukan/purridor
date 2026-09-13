@@ -1,10 +1,12 @@
-use alloc::format;
-use alloc::string::{String, ToString};
-use core::ops::Index;
-use crate::game::player::{Player, PlayerSide};
-use crate::game::strings::{*};
-use crate::raylib::{get_random_value, Button, Color, Frame, Gamepad, Rect, TextEdgeAlignment};
 use super::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::game::input::GameInput;
+use crate::game::player::{Player, PlayerSide};
+use crate::game::tile::{draw_tile, TilePos};
+use crate::game::wall::{Wall, WallOrientation, WallPos};
+use crate::raylib::{get_random_value, Color, Frame};
+use alloc::format;
+use alloc::string::String;
+use core::ops::Index;
 
 #[derive(Debug)]
 pub enum GameState {
@@ -36,58 +38,72 @@ pub enum GameMode {
     // Opposition
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug)]
 pub enum GameSubState {
-    PlayerMove,
+    PlayerMove(PlayerMove),
     MoveTransition
 }
 
+#[derive(Debug)]
+pub enum PlayerMove {
+    WallPlacement{ location: WallPos, orientation: WallOrientation },
+    PlayerMovement(Option<TilePos>),
+}
+
 const DEBUG_DRAW_WALL_INFO: bool = false;
+const DEBUG_PLAYER_INFO: bool = true;
 pub const TILES_DIM: usize = 9;
 /// Walls are 2x1, which means you can place them in between two tiles
 /// Also it's pointless to put it on the edges, so we forbid that by shrinking the grid
 pub const WALL_POINTS_DIM: usize = TILES_DIM - 2;
 
-#[derive(Clone)]
-struct Wall {
-    is_vertical: bool,
-}
-
 pub struct Game {
     state: GameState,
+    world: World,
+
+    elapsed_time: f32,
+    debug_message: String,
+}
+
+pub struct World {
     game_mode: GameMode,
+
     walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM],
 
     players: [Player; 2],
     active_player: PlayerSide,
-
-    gamepad: Gamepad,
-    just_reset: bool,
 }
 
 impl Game {
     pub fn new() -> Self {
         Game {
-            state: GameState::Running(GameSubState::PlayerMove),
-            game_mode: GameMode::Pass,
-            walls: core::array::from_fn(|_| {
-                if get_random_value(1, 20) < 5 {
+            state: GameState::Running(
+                GameSubState::PlayerMove(PlayerMove::PlayerMovement(None))
+            ),
+            world: World {
+                game_mode: GameMode::Pass,
+                walls: core::array::from_fn(|_| {
+                    if get_random_value(1, 20) < 5 {
 
-                    let is_vertical = get_random_value(1, 10) <= 5;
+                        let is_vertical = get_random_value(1, 10) <= 5;
 
-                    Some(Wall { is_vertical })
-                } else {
-                    None
-                }
-            }),
-            players: [
-                Player::new(PlayerSide::White),
-                Player::new(PlayerSide::Black)
-            ],
-            active_player: PlayerSide::White,
+                        Some(Wall {
+                            orientation: if is_vertical { WallOrientation::Vertical } else { WallOrientation::Horizontal },
+                        })
+                    } else {
+                        None
+                    }
+                }),
+                players: [
+                    Player::new(PlayerSide::White),
+                    Player::new(PlayerSide::Black)
+                ],
+                active_player: PlayerSide::White,
+            },
 
-            gamepad: Gamepad::new(),
-            just_reset: true,
+            elapsed_time: 0.0,
+
+            debug_message: String::new(),
         }
     }
 
@@ -97,76 +113,14 @@ impl Game {
 }
 
 // ===== Drawing =====
-pub const TILE_SIZE: usize = 64;
-pub const OFFSET_LEFT: usize = (SCREEN_WIDTH - (TILES_DIM * TILE_SIZE)) / 2;
-pub const OFFSET_TOP: usize = (SCREEN_HEIGHT - (TILES_DIM * TILE_SIZE)) / 2;
-
-const INNER_TILE_SIZE: usize = 52;
-const INNER_TILE_OFFSET: usize = (TILE_SIZE - INNER_TILE_SIZE) / 2;
-
-const SHADOW_COLOR: Color = Color::rgba(20, 20, 20, 50);
-const WALL_COLOR: Color = Color::rgb(251, 225, 185);
-
-fn draw_tile(frame: &mut Frame, x: usize, y: usize) {
-    let color = if (x + y).is_multiple_of(2) {
-        Color::rgb(200, 200, 200)
-    } else {
-        Color::rgb(200, 150, 200)
-    };
-
-    // Background fill
-    let world_x = x * TILE_SIZE + OFFSET_LEFT;
-    let world_y = y * TILE_SIZE + OFFSET_TOP;
-
-    frame.rect((world_x, world_y, TILE_SIZE, TILE_SIZE).into(), color.darken(50));
-
-    // Smaller tile in the center
-    let world_x = x * TILE_SIZE + OFFSET_LEFT + INNER_TILE_OFFSET;
-    let world_y = y * TILE_SIZE + OFFSET_TOP + INNER_TILE_OFFSET;
-
-    // Shadow of the tile
-    frame.rect((world_x + 3, world_y + 3, INNER_TILE_SIZE, INNER_TILE_SIZE).into(), SHADOW_COLOR);
-
-    // Tile itself
-    frame.rect((world_x, world_y, INNER_TILE_SIZE, INNER_TILE_SIZE).into(), color);
-}
-
-impl Wall {
-    // Mind the wall grid! It's different from the regular tile grid
-    // The grid point on x and y marks the center of the wall.
-    // Wall is 2 tiles wide
-    fn construct_rect(&self, x: usize, y: usize, dx: usize, dy: usize) -> Rect {
-        // Constructing a 2 tiles wide rect
-        let world_x = (x + 1) * TILE_SIZE + OFFSET_LEFT;
-        let world_y = (y + 1) * TILE_SIZE + OFFSET_TOP;
-
-        let short_side = INNER_TILE_OFFSET * 2;
-        let long_side = 2 * TILE_SIZE + INNER_TILE_OFFSET * 2;
-
-        (world_x + dx, world_y + dy, long_side, short_side).into()
-    }
-
-    fn draw(&self, frame: &mut Frame, x: usize, y: usize) {
-        let rect = self.construct_rect(x, y, 0, 0);
-        let rotation = if self.is_vertical { 90.0 } else { 0.0 };
-
-        frame.rect_rotation(rect, (0.5, 0.5).into(), rotation, WALL_COLOR);
-    }
-
-    fn draw_shadow(&self, frame: &mut Frame, x: usize, y: usize) {
-        let rect = self.construct_rect(x, y, 3, 3);
-        let rotation = if self.is_vertical { 90.0 } else { 0.0 };
-
-        frame.rect_rotation(rect, (0.5, 0.5).into(), rotation, SHADOW_COLOR);
-    }
-}
+pub const SHADOW_COLOR: Color = Color::rgba(20, 20, 20, 50);
 
 
 // ===== Logic =====
 impl Game {
-    pub fn draw(&self, frame: &mut Frame) {
+    pub fn draw(&self, input: &GameInput, frame: &mut Frame) {
         match &self.state {
-            GameState::Running(sub_state) => self.draw_running(sub_state, frame),
+            GameState::Running(sub_state) => self.draw_running(input, sub_state, frame),
             GameState::Error(info) => self.draw_error(info, frame),
         }
     }
@@ -179,67 +133,82 @@ impl Game {
         frame.const_text(c"Press ZL + Minus to reset.", (100, 400).into(), 24, Color::BLUE)
     }
 
-    fn draw_running(&self, sub_state: &GameSubState, frame: &mut Frame) {
+    fn get_player(&self, player_side: &PlayerSide) -> &Player {
+        self.world.players.index(player_side.index())
+    }
+
+    fn iterate_over_walls<F>(&self, mut operation: F)
+        where F: FnMut(WallPos, &Wall)
+    {
+        for i in 0..WALL_POINTS_DIM {
+            for j in 0..WALL_POINTS_DIM {
+                let index = i * WALL_POINTS_DIM + j;
+
+                if let Some(wall) = self.world.walls.get(index).unwrap() {
+                    // Safe to construct a struct here
+                    let pos = WallPos { x: i, y: j };
+                    operation(pos, wall);
+                }
+            }
+        }
+    }
+
+    fn draw_running(&self, input: &GameInput, sub_state: &GameSubState, frame: &mut Frame) {
         // Tiles
         for i in 0..TILES_DIM {
             for j in 0..TILES_DIM {
-                draw_tile(frame, i, j);
+                // Safe to construct here directly
+                draw_tile(frame, TilePos{ x: i, y: j });
             }
         }
 
         // Players
-        for player in self.players.iter() {
+        for player in self.world.players.iter() {
             player.draw(frame);
         }
 
         // Wall Shadows
-        for i in 0..WALL_POINTS_DIM {
-            for j in 0..WALL_POINTS_DIM {
-                let index = i * WALL_POINTS_DIM + j;
-
-                if let Some(wall) = self.walls.get(index).unwrap() {
-                    wall.draw_shadow(frame, i, j);
-                }
-            }
-        }
+        self.iterate_over_walls(|pos, wall| {
+            wall.draw_shadow(pos, frame);
+        });
 
         // Walls
-        for i in 0..WALL_POINTS_DIM {
-            for j in 0..WALL_POINTS_DIM {
-                let index = i * WALL_POINTS_DIM + j;
-
-                if let Some(wall) = self.walls.get(index).unwrap() {
-                    wall.draw(frame, i, j);
-                }
-            }
-        }
+        self.iterate_over_walls(|pos, wall| {
+            wall.draw(pos, frame);
+        });
 
         // UI
-        match self.game_mode {
+        match self.world.game_mode {
             GameMode::Pass => {
                 let y = SCREEN_HEIGHT - 80;
                 frame.const_text(c"White", (10, y).into(), 24, Color::WHITE);
-                frame.const_text_pro(c"Black",24, TextEdgeAlignment::Right, 10, y as i32, Color::WHITE);
+                frame.const_text_right_align(c"Black", 24, SCREEN_WIDTH, 10, y as i32, Color::WHITE);
 
-                let y = SCREEN_HEIGHT - 50;
-
-                const UI_WALL_OFFSET: usize = 25;
-                const UI_WALL_WIDTH: usize = 15;
-                const UI_WALL_HEIGHT: usize = 40;
-
-                for i in 0..self.players.index(PlayerSide::White.index()).available_walls {
-                    let x = i * UI_WALL_OFFSET + 10;
-                    frame.rect((x, y, UI_WALL_WIDTH, UI_WALL_HEIGHT).into(), WALL_COLOR);
-                }
-
-                for i in 0..self.players.index(PlayerSide::Black.index()).available_walls {
-                    let x = SCREEN_WIDTH - (i * UI_WALL_OFFSET) - UI_WALL_WIDTH - 10;
-                    frame.rect((x, y, UI_WALL_WIDTH, UI_WALL_HEIGHT).into(), WALL_COLOR);
-                }
+                Wall::draw_ui_walls(self.get_player(&PlayerSide::White).available_walls, PlayerSide::White, frame);
+                Wall::draw_ui_walls(self.get_player(&PlayerSide::Black).available_walls, PlayerSide::Black, frame);
             }
         }
 
-        // Debug
+        // PlayerMove specific draw
+        match sub_state {
+            GameSubState::PlayerMove(player_move) => {
+                match player_move {
+                    PlayerMove::PlayerMovement(location) => {
+                        // Draw a ghost version of the current player
+                        if let Some(location) = location {
+                            self.get_player(&self.world.active_player).draw_ghost(location, frame, self.elapsed_time);
+                        }
+                    }
+                    PlayerMove::WallPlacement { location, orientation } => {
+                        // Draw a ghost version of the new wall
+                        Wall::draw_ghost(frame, *location, orientation, self.elapsed_time);
+                    }
+                }
+            }
+            GameSubState::MoveTransition => {}
+        }
+
+        // =================== Debug ===================
         if DEBUG_DRAW_WALL_INFO {
             for i in 0..WALL_POINTS_DIM {
                 for j in 0..WALL_POINTS_DIM {
@@ -248,13 +217,13 @@ impl Game {
                     let x = (i * 30) + 20;
                     let y = (j * 30) + 20;
 
-                    if let Some(wall) = self.walls.get(index).unwrap() {
+                    if let Some(wall) = self.world.walls.get(index).unwrap() {
                         frame.rect(
                             (x, y, 20, 20).into(),
                             Color::WHITE
                         );
 
-                        let text = if wall.is_vertical { "V" } else { "H" };
+                        let text = if let WallOrientation::Vertical = wall.orientation { "V" } else { "H" };
 
                         frame.text(text, (x + 3, y).into(), 20, Color::BLACK);
                     }
@@ -267,30 +236,130 @@ impl Game {
                 }
             }
         }
+
+        if DEBUG_PLAYER_INFO {
+            frame.text(&format!("{:?}", sub_state), (10, 10).into(), 20, Color::WHITE);
+
+            frame.text(&format!("direction: {:?}", input.direction), (10, 30).into(), 20, Color::WHITE);
+
+            frame.text(&format!("A button: {:?}", input.rotate_wall), (10, 50).into(), 20, Color::WHITE);
+
+            frame.text(&format!("Switch: {:?}", input.switch_mode), (10, 70).into(), 20, Color::WHITE);
+
+            frame.text(&self.debug_message, (10, 90).into(), 20, Color::WHITE);
+        }
     }
 
-    pub fn process(&mut self, dt: f32) {
+    pub fn update(&mut self, input: &GameInput, dt: f32) {
+        self.elapsed_time += dt;
+
         // Reset Logic
-        if self.gamepad.down(Button::ZL) && self.gamepad.down(Button::Minus) {
-            if self.just_reset {
-                return
+        if input.reset {
+            self.reset();
+            return;
+        }
+
+        let state = &mut self.state;
+        let world = &mut self.world;
+
+        match state {
+            GameState::Running(sub_state) => {
+                sub_state.update(input, world);
             }
 
-            self.just_reset = true;
-            self.reset();
-        }
-        else {
-            self.just_reset = false;
-        }
-
-        // Main Logic
-        match self.state {
-            GameState::Running(mut sub_state) => self.process_running(&mut sub_state, dt),
             GameState::Error(_) => {}
         }
     }
+}
 
-    pub fn process_running(&mut self, sub_state: &mut GameSubState, dt: f32) {
+impl GameSubState {
+    fn update(
+        &mut self,
+        input: &GameInput,
+        world: &mut World,
+    ) {
+        match self {
+            Self::PlayerMove(player_move) => {
+                player_move.update(input, world);
+            }
 
+            Self::MoveTransition => {
+                // ...
+            }
+        }
+    }
+}
+
+impl PlayerMove {
+    fn switch(&mut self, world: &mut World) {
+        *self = match self {
+            PlayerMove::PlayerMovement(_) => {
+                let other_player = &world.players[world.active_player.other().index()];
+
+                PlayerMove::WallPlacement {
+                    location: WallPos::closest_wall_point(&other_player.pos),
+                    orientation: WallOrientation::Horizontal,
+                }
+            }
+
+            PlayerMove::WallPlacement { .. } => {
+                PlayerMove::PlayerMovement(None)
+            }
+        }
+    }
+
+    fn update(
+        &mut self,
+        input: &GameInput,
+        world: &mut World,
+    ) {
+        if input.switch_mode {
+            self.switch(world);
+        }
+
+        let player = &world.players[world.active_player.index()];
+
+        match self {
+            PlayerMove::PlayerMovement(location) => {
+                let Some(direction) = input.direction else {
+                    return;
+                };
+
+                let (dx, dy) = direction.delta();
+
+                let new_location = (
+                    player.pos.x as i32 + dx,
+                    player.pos.y as i32 + dy,
+                ).try_into();
+
+                if let Ok(new_location) = new_location {
+                    *location = Some(new_location);
+                }
+            }
+
+            PlayerMove::WallPlacement {
+                location,
+                orientation,
+            } => {
+                if input.rotate_wall {
+                    *orientation = orientation.opposite();
+                }
+
+                let Some(direction) = input.direction else {
+                    return;
+                };
+
+                let (dx, dy) = direction.delta();
+
+                let new_location = (
+                    location.x as i32 + dx,
+                    location.y as i32 + dy,
+                ).try_into();
+
+                if let Ok(new_location) = new_location {
+                    *location = new_location;
+                }
+            }
+        }
     }
 }

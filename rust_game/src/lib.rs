@@ -9,15 +9,14 @@ mod game;
 
 use core::ffi::c_int;
 
+use crate::game::input::GameInput;
+use crate::game::world::Game;
+use crate::game::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::raylib::Gamepad;
 use raylib::{
     App,
-    Button,
     Color,
-    Rect,
-    Vec2,
 };
-use crate::game::{SCREEN_HEIGHT, SCREEN_WIDTH};
-use crate::game::world::Game;
 
 #[no_mangle]
 pub extern "C" fn rust_main() -> c_int {
@@ -34,6 +33,7 @@ pub extern "C" fn rust_main() -> c_int {
     app.set_target_fps(60);
 
     let mut game = Game::new();
+    let gamepad = Gamepad::new();
 
     while app.running() {
         let dt = app.delta_time();
@@ -41,8 +41,10 @@ pub extern "C" fn rust_main() -> c_int {
         let mut frame =
             app.begin_frame(Color::rgb(10, 10, 10));
 
-        game.process(dt);
-        game.draw(&mut frame);
+        let input = GameInput::read(&gamepad);
+
+        game.update(&input, dt);
+        game.draw(&input, &mut frame);
 
         // EndDrawing() happens automatically here.
     }
