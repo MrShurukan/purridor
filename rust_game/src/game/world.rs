@@ -1,7 +1,7 @@
 use super::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::game::input::GameInput;
 use crate::game::player::{Player, PlayerSide};
-use crate::game::tile::{draw_tile, TilePos};
+use crate::game::tile::{Tile, TilePos};
 use crate::game::wall::{Wall, WallOrientation, WallPos};
 use crate::raylib::{get_random_value, Color, Frame};
 use alloc::format;
@@ -55,7 +55,7 @@ const DEBUG_PLAYER_INFO: bool = true;
 pub const TILES_DIM: usize = 9;
 /// Walls are 2x1, which means you can place them in between two tiles
 /// Also it's pointless to put it on the edges, so we forbid that by shrinking the grid
-pub const WALL_POINTS_DIM: usize = TILES_DIM - 2;
+pub const WALL_POINTS_DIM: usize = TILES_DIM - 1;
 
 pub struct Game {
     state: GameState,
@@ -68,10 +68,13 @@ pub struct Game {
 pub struct World {
     game_mode: GameMode,
 
+    tiles: [Tile; TILES_DIM * TILES_DIM],
     walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM],
 
     players: [Player; 2],
     active_player: PlayerSide,
+
+    next_state: Option<GameState>,
 }
 
 impl Game {
@@ -82,12 +85,20 @@ impl Game {
             ),
             world: World {
                 game_mode: GameMode::Pass,
-                walls: core::array::from_fn(|_| {
+                tiles: core::array::from_fn(|index| {
+                    let x = index % TILES_DIM;
+                    let y = index / TILES_DIM;
+                    Tile::new(TilePos::new(x, y).unwrap())
+                }),
+                walls: core::array::from_fn(|index| {
                     if get_random_value(1, 20) < 5 {
+                        let x = index % WALL_POINTS_DIM;
+                        let y = index / WALL_POINTS_DIM;
 
                         let is_vertical = get_random_value(1, 10) <= 5;
 
                         Some(Wall {
+                            pos: (x, y).try_into().unwrap(),
                             orientation: if is_vertical { WallOrientation::Vertical } else { WallOrientation::Horizontal },
                         })
                     } else {
@@ -99,6 +110,7 @@ impl Game {
                     Player::new(PlayerSide::Black)
                 ],
                 active_player: PlayerSide::White,
+                next_state: None,
             },
 
             elapsed_time: 0.0,
@@ -137,29 +149,10 @@ impl Game {
         self.world.players.index(player_side.index())
     }
 
-    fn iterate_over_walls<F>(&self, mut operation: F)
-        where F: FnMut(WallPos, &Wall)
-    {
-        for i in 0..WALL_POINTS_DIM {
-            for j in 0..WALL_POINTS_DIM {
-                let index = i * WALL_POINTS_DIM + j;
-
-                if let Some(wall) = self.world.walls.get(index).unwrap() {
-                    // Safe to construct a struct here
-                    let pos = WallPos { x: i, y: j };
-                    operation(pos, wall);
-                }
-            }
-        }
-    }
-
     fn draw_running(&self, input: &GameInput, sub_state: &GameSubState, frame: &mut Frame) {
         // Tiles
-        for i in 0..TILES_DIM {
-            for j in 0..TILES_DIM {
-                // Safe to construct here directly
-                draw_tile(frame, TilePos{ x: i, y: j });
-            }
+        for tile in self.world.tiles.iter() {
+            tile.draw_tile(frame);
         }
 
         // Players
@@ -168,14 +161,14 @@ impl Game {
         }
 
         // Wall Shadows
-        self.iterate_over_walls(|pos, wall| {
-            wall.draw_shadow(pos, frame);
-        });
+        for wall in self.world.walls.iter().flatten() {
+            wall.draw_shadow(frame);
+        }
 
         // Walls
-        self.iterate_over_walls(|pos, wall| {
-            wall.draw(pos, frame);
-        });
+        for wall in self.world.walls.iter().flatten() {
+            wall.draw(frame);
+        }
 
         // UI
         match self.world.game_mode {
@@ -242,21 +235,29 @@ impl Game {
 
             frame.text(&format!("direction: {:?}", input.direction), (10, 30).into(), 20, Color::WHITE);
 
-            frame.text(&format!("A button: {:?}", input.rotate_wall), (10, 50).into(), 20, Color::WHITE);
+            frame.text(&format!("Rotate wall: {:?}", input.rotate_wall), (10, 50).into(), 20, Color::WHITE);
 
-            frame.text(&format!("Switch: {:?}", input.switch_mode), (10, 70).into(), 20, Color::WHITE);
+            frame.text(&format!("Confirm: {:?}", input.confirm), (10, 70).into(), 20, Color::WHITE);
+
+            frame.text(&format!("Switch: {:?}", input.switch_mode), (10, 90).into(), 20, Color::WHITE);
 
             frame.text(&self.debug_message, (10, 90).into(), 20, Color::WHITE);
         }
     }
 
-    pub fn update(&mut self, input: &GameInput, dt: f32) {
+    pub fn update(mut self, input: &GameInput, dt: f32) -> Self {
+        // Global state transition check
+        if let Some(state) = self.world.next_state {
+            self.state = state;
+            self.world.next_state = None;
+        }
+
         self.elapsed_time += dt;
 
         // Reset Logic
         if input.reset {
             self.reset();
-            return;
+            return self;
         }
 
         let state = &mut self.state;
@@ -269,6 +270,8 @@ impl Game {
 
             GameState::Error(_) => {}
         }
+
+        self
     }
 }
 
@@ -297,7 +300,7 @@ impl PlayerMove {
                 let other_player = &world.players[world.active_player.other().index()];
 
                 PlayerMove::WallPlacement {
-                    location: WallPos::closest_wall_point(&other_player.pos),
+                    location: WallPos::closest_point(other_player.pos),
                     orientation: WallOrientation::Horizontal,
                 }
             }
@@ -317,20 +320,16 @@ impl PlayerMove {
             self.switch(world);
         }
 
-        let player = &world.players[world.active_player.index()];
+        let player = &mut world.players[world.active_player.index()];
 
+        // Inputting a choice
         match self {
-            PlayerMove::PlayerMovement(location) => {
+            PlayerMove::PlayerMovement(location) => 'block: {
                 let Some(direction) = input.direction else {
-                    return;
+                    break 'block;
                 };
 
-                let (dx, dy) = direction.delta();
-
-                let new_location = (
-                    player.pos.x as i32 + dx,
-                    player.pos.y as i32 + dy,
-                ).try_into();
+                let new_location = player.pos.translate_dir(direction);
 
                 if let Ok(new_location) = new_location {
                     *location = Some(new_location);
@@ -340,25 +339,37 @@ impl PlayerMove {
             PlayerMove::WallPlacement {
                 location,
                 orientation,
-            } => {
+            } => 'block: {
                 if input.rotate_wall {
                     *orientation = orientation.opposite();
                 }
 
                 let Some(direction) = input.direction else {
-                    return;
+                    break 'block;
                 };
 
-                let (dx, dy) = direction.delta();
-
-                let new_location = (
-                    location.x as i32 + dx,
-                    location.y as i32 + dy,
-                ).try_into();
+                let new_location = location.translate_dir(direction);
 
                 if let Ok(new_location) = new_location {
                     *location = new_location;
                 }
+            }
+        }
+
+        // Selecting a choice
+        if !input.confirm {
+            return;
+        }
+
+        match self {
+            PlayerMove::PlayerMovement(Some(location)) => {
+                player.move_to(*location);
+            },
+            PlayerMove::PlayerMovement(None) => {
+                // TODO: Show a notification prompting that you need to select a direction first
+            }
+            PlayerMove::WallPlacement { location, orientation } => {
+
             }
         }
     }

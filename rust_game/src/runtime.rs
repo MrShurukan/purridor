@@ -1,3 +1,6 @@
+use crate::panic_buffer::PanicBuffer;
+use crate::raylib::{App, Color};
+use core::fmt::Write;
 use core::{
     alloc::{GlobalAlloc, Layout},
     ffi::c_void,
@@ -34,6 +37,25 @@ fn allocation_error(_layout: Layout) -> ! {
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {}
+fn panic(info: &PanicInfo) -> ! {
+    let mut buffer = PanicBuffer::new();
+
+    let _ = writeln!(buffer, "PANIC!");
+
+    if let Some(location) = info.location() {
+        let _ = writeln!(
+            buffer,
+            "{}:{}:{}",
+            location.file(),
+            location.line(),
+            location.column(),
+        );
+    }
+
+    let _ = writeln!(buffer);
+    let _ = write!(buffer, "{}", info.message());
+
+    crate::raylib::panic_screen(
+        buffer.as_bytes_with_nul()
+    )
 }

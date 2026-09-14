@@ -50,10 +50,10 @@ impl GameInput {
                 gamepad.pressed(Button::R),
 
             rotate_wall:
-                gamepad.pressed(Button::A),
+                gamepad.pressed(Button::B),
 
             confirm:
-                gamepad.pressed(Button::B),
+                gamepad.pressed(Button::A),
         }
     }
 }

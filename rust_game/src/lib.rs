@@ -6,6 +6,7 @@ extern crate alloc;
 mod runtime;
 mod raylib;
 mod game;
+mod panic_buffer;
 
 use core::ffi::c_int;
 
@@ -43,7 +44,7 @@ pub extern "C" fn rust_main() -> c_int {
 
         let input = GameInput::read(&gamepad);
 
-        game.update(&input, dt);
+        game = game.update(&input, dt);
         game.draw(&input, &mut frame);
 
         // EndDrawing() happens automatically here.

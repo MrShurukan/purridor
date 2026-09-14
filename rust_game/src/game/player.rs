@@ -1,8 +1,7 @@
 use crate::game::tile::TilePos;
+use crate::game::util::SinePulser;
 use crate::game::world::TILES_DIM;
 use crate::raylib::{Color, Frame};
-use libm::sinf;
-use crate::game::util::SinePulser;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerSide {
@@ -46,12 +45,12 @@ const PAWN_SHADOW_RADIUS: f32 = PAWN_RADIUS * 1.2;
 impl Player {
     pub fn new(side: PlayerSide) -> Self {
         Player {
-            pos: TilePos {
-                x: 4,
-                y: if let PlayerSide::White = side { TILES_DIM - 1 } else { 0 }
-            },
-            side,
+            pos: TilePos::new(
+                4,
+                if let PlayerSide::White = side { TILES_DIM - 1 } else { 0 }
+            ).unwrap(),
 
+            side,
             available_walls: 20,
         }
     }
@@ -80,7 +79,7 @@ impl Player {
 
     /// Returns if translation was successful
     pub fn translate(&mut self, delta_x: i32, delta_y: i32) -> bool {
-        let new_pos = ((self.pos.x as i32) + delta_x, (self.pos.y as i32) + delta_y).try_into();
+        let new_pos = ((self.pos.x() as i32) + delta_x, (self.pos.y() as i32) + delta_y).try_into();
 
         if let Ok(new_pos) = new_pos {
             self.pos = new_pos;
@@ -89,5 +88,9 @@ impl Player {
         else {
             false
         }
+    }
+
+    pub fn move_to(&mut self, pos: TilePos) {
+        self.pos = pos;
     }
 }

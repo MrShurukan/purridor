@@ -1,12 +1,11 @@
+use crate::game::input::Direction;
 use crate::game::player::PlayerSide;
 use crate::game::tile::{TilePos, INNER_TILE_OFFSET, OFFSET_LEFT, OFFSET_TOP, TILE_SIZE};
+use crate::game::util::SinePulser;
+use crate::game::wall::WallPosError::{XOutOfBounds, YOutOfBounds};
 use crate::game::world::{SHADOW_COLOR, WALL_POINTS_DIM};
 use crate::game::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use crate::raylib::{Color, Frame, Rect};
-use alloc::format;
-use alloc::string::String;
-use libm::sinf;
-use crate::game::util::SinePulser;
 
 const WALL_COLOR: Color = Color::rgb(251, 225, 185);
 
@@ -16,36 +15,55 @@ const UI_WALL_HEIGHT: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WallPos {
-    pub x: usize,
-    pub y: usize,
+    x: usize,
+    y: usize,
 }
 
 impl WallPos {
-    pub fn closest_wall_point(grid_coords: &TilePos) -> WallPos {
-        WallPos {
-            x: grid_coords.x.clamp(0, WALL_POINTS_DIM - 1),
-            y: grid_coords.y.clamp(0, WALL_POINTS_DIM - 1),
+    pub const fn new(x: usize, y: usize) -> Result<Self, WallPosError> {
+        if x >= WALL_POINTS_DIM { return Err(XOutOfBounds); }
+        if y >= WALL_POINTS_DIM { return Err(YOutOfBounds); }
+
+        Ok(Self { x, y })
+    }
+
+    pub fn closest_point(tile_pos: TilePos) -> Self {
+        Self {
+            x: tile_pos.x().clamp(0, WALL_POINTS_DIM - 1),
+            y: tile_pos.y().clamp(0, WALL_POINTS_DIM - 1),
         }
+    }
+
+    pub fn translate(self, dx: i32, dy: i32) -> Result<Self, WallPosError> {
+        (self.x as i32 + dx, self.y as i32 + dy).try_into()
+    }
+
+    pub fn translate_dir(self, direction: Direction) -> Result<Self, WallPosError> {
+        let (dx, dy) = direction.delta();
+        self.translate(dx, dy)
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WallPosError {
+    XOutOfBounds,
+    YOutOfBounds,
+}
+
 impl TryFrom<(usize, usize)> for WallPos {
-    type Error = String;
+    type Error = WallPosError;
 
     fn try_from((x, y): (usize, usize)) -> Result<Self, Self::Error> {
-        if x >= WALL_POINTS_DIM { return Err(format!("Invalid x wall position: {}", x)) }
-        if y >= WALL_POINTS_DIM { return Err(format!("Invalid y wall position: {}", y)) }
-
-        Ok(Self { x, y })
+        Self::new(x, y)
     }
 }
 
 impl TryFrom<(i32, i32)> for WallPos {
-    type Error = String;
+    type Error = WallPosError;
 
     fn try_from((x, y): (i32, i32)) -> Result<Self, Self::Error> {
-        let x: usize = x.try_into().map_err(|_| format!("Invalid x wall position: {}", x))?;
-        let y: usize = y.try_into().map_err(|_| format!("Invalid y wall position: {}", y))?;
+        let x: usize = x.try_into().map_err(|_| XOutOfBounds)?;
+        let y: usize = y.try_into().map_err(|_| YOutOfBounds)?;
 
         (x, y).try_into()
     }
@@ -74,6 +92,7 @@ impl WallOrientation {
 }
 
 pub struct Wall {
+    pub pos: WallPos,
     pub orientation: WallOrientation,
 }
 
@@ -93,15 +112,15 @@ impl Wall {
         (world_x + dx, world_y + dy, long_side, short_side).into()
     }
 
-    pub fn draw(&self, location: WallPos, frame: &mut Frame) {
-        let rect = Self::construct_rect(location, 0, 0);
+    pub fn draw(&self, frame: &mut Frame) {
+        let rect = Self::construct_rect(self.pos, 0, 0);
         let rotation = self.orientation.rotation();
 
         frame.rect_rotation(rect, (0.5, 0.5).into(), rotation, WALL_COLOR);
     }
 
-    pub fn draw_shadow(&self, location: WallPos, frame: &mut Frame) {
-        let rect = Self::construct_rect(location, 3, 3);
+    pub fn draw_shadow(&self, frame: &mut Frame) {
+        let rect = Self::construct_rect(self.pos, 3, 3);
         let rotation = self.orientation.rotation();
 
         frame.rect_rotation(rect, (0.5, 0.5).into(), rotation, SHADOW_COLOR);
