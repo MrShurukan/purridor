@@ -666,3 +666,39 @@ pub fn get_random_value(min: i32, max: i32) -> i32 {
         sys::GetRandomValue(min, max)
     }
 }
+
+// ============================================================
+// Panic handling
+// ============================================================
+/// Displays a simple screen describing a problem. [message] has to be null-terminated
+pub(crate) fn panic_screen(
+    message: &[u8],
+) -> ! {
+    loop {
+        unsafe {
+            sys::BeginDrawing();
+
+            sys::ClearBackground(
+                Color::rgb(20, 0, 0)
+            );
+
+            sys::DrawText(
+                c"FATAL ERROR".as_ptr(),
+                40,
+                40,
+                48,
+                Color::RED,
+            );
+
+            sys::DrawText(
+                message.as_ptr().cast(),
+                40,
+                120,
+                22,
+                Color::WHITE,
+            );
+
+            sys::EndDrawing();
+        }
+    }
+}
