@@ -27,6 +27,18 @@ impl WallPos {
         Ok(Self { x, y })
     }
 
+    pub const fn x(self) -> usize {
+        self.x
+    }
+
+    pub const fn y(self) -> usize {
+        self.y
+    }
+
+    pub const fn array_index(self) -> usize {
+        self.y * WALL_POINTS_DIM + self.x
+    }
+
     pub fn closest_point(tile_pos: TilePos) -> Self {
         Self {
             x: tile_pos.x().clamp(0, WALL_POINTS_DIM - 1),
@@ -91,6 +103,7 @@ impl WallOrientation {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Wall {
     pub pos: WallPos,
     pub orientation: WallOrientation,
@@ -128,7 +141,13 @@ impl Wall {
 
     const GHOST_ALPHA_PULSER: SinePulser = SinePulser::new(20.0, 40.0, 2.0);
 
-    pub fn draw_ghost(frame: &mut Frame, location: WallPos, orientation: &WallOrientation, time: f32) {
+    pub fn draw_ghost(
+        frame: &mut Frame,
+        location: WallPos,
+        orientation: WallOrientation,
+        placement_possible: bool,
+        time: f32
+    ) {
         let mut rect = Self::construct_rect(location, 3, 3);
         let rotation = orientation.rotation();
 
@@ -143,8 +162,10 @@ impl Wall {
         rect.x -= 3.0;
         rect.y -= 3.0;
 
+        let tint_color = if placement_possible { Color::GREEN } else { Color::RED };
+
         frame.rect_rotation(rect, (0.5, 0.5).into(), rotation,
-                            WALL_COLOR.tint(Color::GREEN, 0.5).with_alpha((255.0 - alpha_pulse).max(0.0) as u8));
+                            WALL_COLOR.tint(tint_color, 0.5).with_alpha((255.0 - alpha_pulse).max(0.0) as u8));
     }
 
     pub fn draw_ui_walls(amount: usize, side: PlayerSide, frame: &mut Frame) {

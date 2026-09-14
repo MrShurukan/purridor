@@ -1,12 +1,12 @@
 use super::{SCREEN_HEIGHT, SCREEN_WIDTH};
-use crate::game::input::GameInput;
+use crate::game::input::{Direction, GameInput};
 use crate::game::player::{Player, PlayerSide};
-use crate::game::tile::{Tile, TilePos};
+use crate::game::tile::{Corner, Tile, TilePos};
 use crate::game::wall::{Wall, WallOrientation, WallPos};
 use crate::raylib::{get_random_value, Color, Frame};
 use alloc::format;
 use alloc::string::String;
-use core::ops::Index;
+use core::ops::{Index, IndexMut};
 
 #[derive(Debug)]
 pub enum GameState {
@@ -77,6 +77,159 @@ pub struct World {
     next_state: Option<GameState>,
 }
 
+pub enum WallPlacementError {
+    Collision,
+    Overlap,
+    PlayerEntrapped(PlayerSide)
+}
+
+impl World {
+    pub fn place_wall(&mut self, pos: WallPos, orientation: WallOrientation) -> Result<(), WallPlacementError> {
+        self.can_place_wall(pos, orientation)?;
+
+        self.walls[pos.array_index()] = Some(Wall { pos, orientation });
+
+        Ok(())
+    }
+
+    pub fn can_place_wall(
+        &self,
+        pos: WallPos,
+        orientation: WallOrientation
+    ) -> Result<(), WallPlacementError> {
+        let index = pos.array_index();
+
+        // 1) No wall must be present there already
+        if let Some(_) = self.walls[index] {
+            return Err(WallPlacementError::Collision);
+        }
+
+        // 2) Walls must not collide (they are 2x1 after all)
+        match orientation {
+            WallOrientation::Vertical => {
+                if [Direction::Up, Direction::Down].into_iter()
+                    .filter_map(|dir| pos.translate_dir(dir).ok())
+                    .filter_map(|pos| self.walls[pos.array_index()])
+                    .filter(|wall| wall.orientation == WallOrientation::Vertical)
+                    .next()
+                    .is_some() {
+                    return Err(WallPlacementError::Overlap);
+                }
+            },
+            WallOrientation::Horizontal => {
+                if [Direction::Left, Direction::Right].into_iter()
+                    .filter_map(|dir| pos.translate_dir(dir).ok())
+                    .filter_map(|pos| self.walls[pos.array_index()])
+                    .filter(|wall| wall.orientation == WallOrientation::Horizontal)
+                    .next()
+                    .is_some() {
+                    return Err(WallPlacementError::Overlap);
+                }
+            },
+        }
+
+        // 3) Placement mustn't trap any player
+        let mut walls_copy = self.walls;
+        walls_copy[index] = Some(Wall { pos, orientation });
+
+        for player in self.players.iter() {
+            // players must be able to reach the other end of the board
+            let goal = player.side().other().start_y();
+
+            if !Self::path_available(walls_copy, player.pos, goal) {
+                return Err(WallPlacementError::PlayerEntrapped(player.side()))
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Checks if path is available from the tile to a row with a specified y level
+    fn path_available(
+        walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM],
+        from: TilePos,
+        to_y: usize
+    ) -> bool {
+        let mut visited = core::array::repeat(false);
+
+        Self::path_available_internal(&mut visited, walls, from, to_y)
+    }
+
+    fn path_available_internal(
+        visited: &mut [bool; TILES_DIM * TILES_DIM],
+        walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM],
+        from: TilePos,
+        to_y: usize
+    ) -> bool {
+        let index = from.array_index();
+
+        // If we already visited a tile return
+        if visited[index] { return false; }
+
+        // If we found our goal, path is complete!
+        if from.y() == to_y {
+            return true;
+        }
+
+        // Otherwise keep searching
+
+        // Mark current tile as visited
+        visited[index] = true;
+
+        // Visit other tiles (if possible)
+        [Direction::Up, Direction::Left, Direction::Down, Direction::Right]
+            .into_iter()
+            .filter_map(|dir| {
+                // Don't traverse walls
+                if Self::wall_blocks(from, dir, walls) {
+                    None
+                }
+                else {
+                    from.translate_dir(dir).ok()
+                }
+            })
+            .any(|next_pos| Self::path_available_internal(visited, walls, next_pos, to_y))
+    }
+
+    fn wall_blocks(
+        tile: TilePos,
+        direction: Direction,
+        walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM]
+    ) -> bool {
+        match direction {
+            Direction::Right =>
+                Self::check_corner_walls(
+                    &[Corner::TopRight, Corner::BottomRight], WallOrientation::Vertical,
+                    tile, walls),
+            Direction::Up =>
+                Self::check_corner_walls(
+                    &[Corner::TopRight, Corner::TopLeft], WallOrientation::Horizontal,
+                    tile, walls),
+            Direction::Left =>
+                Self::check_corner_walls(
+                    &[Corner::TopLeft, Corner::BottomLeft], WallOrientation::Vertical,
+                    tile, walls),
+            Direction::Down =>
+                Self::check_corner_walls(
+                    &[Corner::BottomLeft, Corner::BottomRight], WallOrientation::Horizontal,
+                    tile, walls),
+        }
+    }
+
+    /// Checks specified corners of a tile if they have walls in a specified orientation
+    fn check_corner_walls(
+        corners: &[Corner],
+        orientation: WallOrientation,
+        tile: TilePos,
+        walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM],
+    ) -> bool {
+        corners.into_iter()
+            .filter_map(|corner| tile.wall_point(*corner).ok())
+            .filter_map(|wall_point| walls[wall_point.array_index()])
+            .any(|wall| wall.orientation == orientation)
+    }
+}
+
 impl Game {
     pub fn new() -> Self {
         Game {
@@ -91,7 +244,7 @@ impl Game {
                     Tile::new(TilePos::new(x, y).unwrap())
                 }),
                 walls: core::array::from_fn(|index| {
-                    if get_random_value(1, 20) < 5 {
+                    if get_random_value(1, 20) < 2 {
                         let x = index % WALL_POINTS_DIM;
                         let y = index / WALL_POINTS_DIM;
 
@@ -194,7 +347,13 @@ impl Game {
                     }
                     PlayerMove::WallPlacement { location, orientation } => {
                         // Draw a ghost version of the new wall
-                        Wall::draw_ghost(frame, *location, orientation, self.elapsed_time);
+                        Wall::draw_ghost(
+                            frame,
+                            *location,
+                            *orientation,
+                            self.world.can_place_wall(*location, *orientation).is_ok(),
+                            self.elapsed_time
+                        );
                     }
                 }
             }
@@ -298,10 +457,12 @@ impl PlayerMove {
         *self = match self {
             PlayerMove::PlayerMovement(_) => {
                 let other_player = &world.players[world.active_player.other().index()];
+                let location = WallPos::closest_point(other_player.pos);
+                let orientation = WallOrientation::Horizontal;
 
                 PlayerMove::WallPlacement {
-                    location: WallPos::closest_point(other_player.pos),
-                    orientation: WallOrientation::Horizontal,
+                    location,
+                    orientation
                 }
             }
 
@@ -363,13 +524,14 @@ impl PlayerMove {
 
         match self {
             PlayerMove::PlayerMovement(Some(location)) => {
+                // TODO: world.move_player(player.side(), *location);
                 player.move_to(*location);
             },
             PlayerMove::PlayerMovement(None) => {
                 // TODO: Show a notification prompting that you need to select a direction first
             }
-            PlayerMove::WallPlacement { location, orientation } => {
-
+            PlayerMove::WallPlacement { location, orientation, .. } => {
+                let _ = world.place_wall(*location, *orientation);
             }
         }
     }

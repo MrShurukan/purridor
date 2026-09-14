@@ -2,6 +2,7 @@ use crate::game::input::Direction;
 use crate::game::tile::TilePosError::{XOutOfBounds, YOutOfBounds};
 use crate::game::world::{SHADOW_COLOR, TILES_DIM};
 use crate::game::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use crate::game::wall::{WallPos, WallPosError};
 use crate::raylib::{Color, Frame, Vec2};
 
 pub const OFFSET_LEFT: usize = (SCREEN_WIDTH - (TILES_DIM * TILE_SIZE)) / 2;
@@ -51,12 +52,24 @@ pub struct TilePos {
     y: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Corner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 impl TilePos {
     pub const fn new(x: usize, y: usize) -> Result<Self, TilePosError> {
         if x >= TILES_DIM { return Err(XOutOfBounds); }
         if y >= TILES_DIM { return Err(YOutOfBounds) }
 
         Ok(Self { x, y })
+    }
+
+    pub const fn array_index(&self) -> usize {
+        self.y * TILES_DIM + self.x
     }
 
     pub fn translate(self, dx: i32, dy: i32) -> Result<Self, TilePosError> {
@@ -85,6 +98,27 @@ impl TilePos {
             (self.y as f32 + 0.5) * TILE_SIZE as f32
                 + OFFSET_TOP as f32,
         )
+    }
+
+    /// Calculates a wall pos (if not out of bounds) that is located at a corner of a tile
+    pub fn wall_point(self, corner: Corner) -> Result<WallPos, WallPosError> {
+        match corner {
+            Corner::TopLeft => {
+                (self.x.checked_sub(1).ok_or(WallPosError::XOutOfBounds)?,
+                 self.y.checked_sub(1).ok_or(WallPosError::YOutOfBounds)?).try_into()
+            }
+            Corner::TopRight => {
+                (self.x,
+                 self.y.checked_sub(1).ok_or(WallPosError::YOutOfBounds)?).try_into()
+            },
+            Corner::BottomLeft => {
+                (self.x.checked_sub(1).ok_or(WallPosError::XOutOfBounds)?,
+                 self.y).try_into()
+            },
+            Corner::BottomRight => {
+                (self.x, self.y).try_into()
+            },
+        }
     }
 }
 

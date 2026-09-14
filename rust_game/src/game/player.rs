@@ -30,6 +30,13 @@ impl PlayerSide {
             PlayerSide::Black => Color::rgb(30, 30, 30),
         }
     }
+
+    pub const fn start_y(self) -> usize {
+        match self {
+            PlayerSide::White => TILES_DIM - 1,
+            PlayerSide::Black => 0
+        }
+    }
 }
 
 pub struct Player {
@@ -45,14 +52,15 @@ const PAWN_SHADOW_RADIUS: f32 = PAWN_RADIUS * 1.2;
 impl Player {
     pub fn new(side: PlayerSide) -> Self {
         Player {
-            pos: TilePos::new(
-                4,
-                if let PlayerSide::White = side { TILES_DIM - 1 } else { 0 }
-            ).unwrap(),
+            pos: TilePos::new(4, side.start_y()).unwrap(),
 
             side,
             available_walls: 20,
         }
+    }
+
+    pub const fn side(&self) -> PlayerSide {
+        self.side
     }
 
     pub fn draw(&self, frame: &mut Frame) {
