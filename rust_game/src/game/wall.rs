@@ -6,6 +6,7 @@ use crate::raylib::{Color, Frame, Rect};
 use alloc::format;
 use alloc::string::String;
 use libm::sinf;
+use crate::game::util::SinePulser;
 
 const WALL_COLOR: Color = Color::rgb(251, 225, 185);
 
@@ -76,6 +77,7 @@ pub struct Wall {
     pub orientation: WallOrientation,
 }
 
+
 impl Wall {
     // Mind the wall grid! It's different from the regular tile grid
     // The grid point on x and y marks the center of the wall.
@@ -105,18 +107,25 @@ impl Wall {
         frame.rect_rotation(rect, (0.5, 0.5).into(), rotation, SHADOW_COLOR);
     }
 
+    const GHOST_ALPHA_PULSER: SinePulser = SinePulser::new(20.0, 40.0, 2.0);
+
     pub fn draw_ghost(frame: &mut Frame, location: WallPos, orientation: &WallOrientation, time: f32) {
         let mut rect = Self::construct_rect(location, 3, 3);
         let rotation = orientation.rotation();
 
-        frame.rect_rotation(rect, (0.5, 0.5).into(), rotation,
-                            SHADOW_COLOR.with_alpha((sinf(time * 3.0) * SHADOW_COLOR.a as f32) as u8));
+        let alpha_pulse = Self::GHOST_ALPHA_PULSER.pulse(time);
+
+        let shadow_color = SHADOW_COLOR.with_alpha(
+            SHADOW_COLOR.a.saturating_sub(alpha_pulse as u8)
+        );
+
+        frame.rect_rotation(rect, (0.5, 0.5).into(), rotation, shadow_color);
 
         rect.x -= 3.0;
         rect.y -= 3.0;
 
         frame.rect_rotation(rect, (0.5, 0.5).into(), rotation,
-                            WALL_COLOR.with_alpha((sinf(time * 3.0) * 100.0 + 50.0) as u8));
+                            WALL_COLOR.tint(Color::GREEN, 0.5).with_alpha((255.0 - alpha_pulse).max(0.0) as u8));
     }
 
     pub fn draw_ui_walls(amount: usize, side: PlayerSide, frame: &mut Frame) {

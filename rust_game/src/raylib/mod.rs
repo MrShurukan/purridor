@@ -198,6 +198,14 @@ pub struct Color {
     pub a: u8,
 }
 
+pub const fn lerp(from: f32, to: f32, t: f32) -> f32 {
+    from * (1.0 - t) + to * t
+}
+
+pub const fn lerp_u8(from: u8, to: u8, t: f32) -> u8 {
+    lerp(from as f32, to as f32, t) as u8
+}
+
 impl Color {
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self::rgba(r, g, b, 255)
@@ -221,6 +229,18 @@ impl Color {
             r: self.r.saturating_sub(amount),
             g: self.g.saturating_sub(amount),
             b: self.b.saturating_sub(amount),
+            a: self.a
+        }
+    }
+
+    /// Tints the color by a percentage (0 -> 1),
+    /// where 0 is base color and 1 means fully tint_color.
+    /// Doesn't affect alpha
+    pub const fn tint(self, tint_color: Color, amount: f32) -> Self {
+        Self {
+            r: lerp_u8(self.r, tint_color.r, amount),
+            g: lerp_u8(self.g, tint_color.g, amount),
+            b: lerp_u8(self.b, tint_color.b, amount),
             a: self.a
         }
     }

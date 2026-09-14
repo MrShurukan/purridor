@@ -2,6 +2,7 @@ use crate::game::tile::TilePos;
 use crate::game::world::TILES_DIM;
 use crate::raylib::{Color, Frame};
 use libm::sinf;
+use crate::game::util::SinePulser;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlayerSide {
@@ -64,13 +65,17 @@ impl Player {
         frame.circle(self.pos.screen_center(), PAWN_RADIUS, color);
     }
 
+    const GHOST_ALPHA_PULSER: SinePulser = SinePulser::new(20.0, 100.0, 2.0);
+
     pub fn draw_ghost(&self, location: &TilePos, frame: &mut Frame, time: f32) {
         let color = self.side.color();
+
+        let alpha_pulse = Self::GHOST_ALPHA_PULSER.pulse(time);
 
         // "Shadow"
         frame.circle(location.screen_center(), PAWN_SHADOW_RADIUS, Color::rgba(30, 30, 30, 20));
         // Pawn
-        frame.circle(location.screen_center(), PAWN_RADIUS, color.with_alpha((sinf(time * 3.0) * 100.0 + 75.0) as u8));
+        frame.circle(location.screen_center(), PAWN_RADIUS, color.with_alpha((255.0 - alpha_pulse).max(0.0) as u8));
     }
 
     /// Returns if translation was successful
