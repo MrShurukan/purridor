@@ -45,7 +45,7 @@ pub extern "C" fn rust_main() -> c_int {
         let input = GameInput::read(&gamepad);
 
         game.update(&input, dt);
-        game.draw(&input, &mut frame);
+        game.draw(&mut frame);
 
         // EndDrawing() happens automatically here.
     }

@@ -15,7 +15,7 @@ type GS = GameState;
 pub enum GameState {
     // MainMenu,
     Running(GSS),
-    // GameOver,
+    GameOver { victory: PlayerSide },
     Error(ErrorInfo)
 }
 
@@ -79,6 +79,8 @@ pub const WALL_POINTS_DIM: usize = TILES_DIM - 1;
 pub struct Assets {
     pub white_avatar: Texture,
     pub black_avatar: Texture,
+    pub white_avatar_win: Texture,
+    pub black_avatar_win: Texture,
 }
 
 impl Assets {
@@ -92,6 +94,16 @@ impl Assets {
             black_avatar:
                 Texture::load(
                     c"romfs:/textures/svechka.png"
+                )?,
+
+            white_avatar_win:
+                Texture::load(
+                    c"romfs:/textures/koska_win.png"
+                )?,
+
+            black_avatar_win:
+                Texture::load(
+                    c"romfs:/textures/svechka_win.png"
                 )?,
         })
     }
@@ -441,9 +453,13 @@ pub const SHADOW_COLOR: Color = Color::rgba(20, 20, 20, 50);
 
 // ===== Logic =====
 impl Game {
-    pub fn draw(&self, input: &GameInput, frame: &mut Frame) {
+    pub fn draw(&self, frame: &mut Frame) {
         match &self.state {
-            GS::Running(sub_state) => self.draw_running(input, sub_state, frame),
+            GS::Running(sub_state) => {
+                self.draw_running(frame, false);
+                self.draw_player_turn(sub_state, frame);
+            },
+            GS::GameOver { .. } => self.draw_running(frame, true),
             GS::Error(info) => self.draw_error(info, frame),
         }
     }
@@ -474,7 +490,7 @@ impl Game {
         self.world.get_opposing_player()
     }
 
-    fn draw_running(&self, input: &GameInput, sub_state: &GameSubState, frame: &mut Frame) {
+    fn draw_running(&self, frame: &mut Frame, victory_mode: bool) {
         // Tiles
         for tile in self.world.tiles.iter() {
             tile.draw_tile(frame);
@@ -511,22 +527,33 @@ impl Game {
                 let x = 10;
                 frame.const_text(self.world.active_player.move_string(), (x, y).into(), 24, Color::WHITE);
 
-                let avatar = match self.world.active_player {
-                    PlayerSide::White => &self.assets.white_avatar,
-                    PlayerSide::Black => &self.assets.black_avatar,
+                let avatar = match (victory_mode, self.world.active_player) {
+                    (false, PlayerSide::White) => &self.assets.white_avatar,
+                    (false, PlayerSide::Black) => &self.assets.black_avatar,
+                    (true, PlayerSide::White) => &self.assets.white_avatar_win,
+                    (true, PlayerSide::Black) => &self.assets.black_avatar_win
                 };
                 frame.texture(avatar, (x, y + 40).into());
 
                 // Help
                 let y = 10;
                 frame.const_text_right_align(c"Help:", 24, SCREEN_WIDTH, 10, y, Color::WHITE);
-                frame.const_text_right_align(       c"Move: dpad", 24, SCREEN_WIDTH, 10, y + 40, Color::WHITE);
-                frame.const_text_right_align(c"Switch mode:  L/R", 24, SCREEN_WIDTH, 10, y + 60, Color::WHITE);
-                frame.const_text_right_align(    c"Confirm:     A", 24, SCREEN_WIDTH, 10, y + 80, Color::WHITE);
-                frame.const_text_right_align(c"Rotate wall:     B", 24, SCREEN_WIDTH, 10, y + 100, Color::WHITE);
+                if !victory_mode {
+                    frame.const_text_right_align(c"Move: dpad", 24, SCREEN_WIDTH, 10, y + 40, Color::WHITE);
+                    frame.const_text_right_align(c"Switch mode:  L/R", 24, SCREEN_WIDTH, 10, y + 60, Color::WHITE);
+                    frame.const_text_right_align(c"Confirm:     A", 24, SCREEN_WIDTH, 10, y + 80, Color::WHITE);
+                    frame.const_text_right_align(c"Rotate wall:     B", 24, SCREEN_WIDTH, 10, y + 100, Color::WHITE);
+                } else {
+                    frame.const_text_right_align(c"Reset game: ZL + Minus", 24, SCREEN_WIDTH, 10, y + 40, Color::WHITE);
+                }
             }
         }
 
+        // No need to draw anything else in victory screen
+        if victory_mode { return; }
+    }
+
+    fn draw_player_turn(&self, sub_state: &GameSubState, frame: &mut Frame) {
         // PlayerTurn specific draw
         match sub_state {
             GSS::PlayerTurn(PM::Movement(PMV::Regular(direction))) => {
@@ -559,49 +586,6 @@ impl Game {
             },
             GSS::MoveTransition => {}
         }
-
-        // =================== Debug ===================
-        if DEBUG_DRAW_WALL_INFO {
-            for i in 0..WALL_POINTS_DIM {
-                for j in 0..WALL_POINTS_DIM {
-                    let index = i * WALL_POINTS_DIM + j;
-
-                    let x = (i * 30) + 20;
-                    let y = (j * 30) + 20;
-
-                    if let Some(wall) = self.world.walls.get(index).unwrap() {
-                        frame.rect(
-                            (x, y, 20, 20).into(),
-                            Color::WHITE
-                        );
-
-                        let text = if let WallOrientation::Vertical = wall.orientation { "V" } else { "H" };
-
-                        frame.text(text, (x + 3, y).into(), 20, Color::BLACK);
-                    }
-                    else {
-                        frame.rect(
-                            (x, y, 20, 20).into(),
-                            Color::WHITE.darken(100),
-                        );
-                    }
-                }
-            }
-        }
-
-        if DEBUG_PLAYER_INFO {
-            frame.text(&format!("{:?}", sub_state), (10, 10).into(), 20, Color::WHITE);
-
-            frame.text(&format!("direction: {:?}", input.direction), (10, 30).into(), 20, Color::WHITE);
-
-            frame.text(&format!("Rotate wall: {:?}", input.rotate_wall), (10, 50).into(), 20, Color::WHITE);
-
-            frame.text(&format!("Confirm: {:?}", input.confirm), (10, 70).into(), 20, Color::WHITE);
-
-            frame.text(&format!("Switch: {:?}", input.switch_mode), (10, 90).into(), 20, Color::WHITE);
-
-            frame.text(&self.debug_message, (10, 90).into(), 20, Color::WHITE);
-        }
     }
 
     pub fn update(&mut self, input: &GameInput, dt: f32) {
@@ -627,7 +611,12 @@ impl Game {
 
             GS::Running(GSS::MoveTransition) => {
                 // Potential animations may be played here
-                // Victory conditions also should go here
+
+                // Victory Condition
+                if world.get_active_player().pos().y() == world.active_player.other().start_y() {
+                    *state = GS::GameOver { victory: world.active_player };
+                    return;
+                }
 
                 world.active_player = world.active_player.other();
 
@@ -639,6 +628,7 @@ impl Game {
                 }
             },
 
+            GS::GameOver { .. } => {},
             GS::Error(_) => {}
         }
     }
