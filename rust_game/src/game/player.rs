@@ -40,10 +40,10 @@ impl PlayerSide {
 }
 
 pub struct Player {
-    pub pos: TilePos,
+    pos: TilePos,
     side: PlayerSide,
 
-    pub available_walls: usize,
+    available_walls: usize,
 }
 
 const PAWN_RADIUS: f32 = 20.0;
@@ -59,6 +59,12 @@ impl Player {
         }
     }
 
+    pub const fn pos(&self) -> TilePos {
+        self.pos
+    }
+    pub const fn available_walls(&self) -> usize {
+        self.available_walls
+    }
     pub const fn side(&self) -> PlayerSide {
         self.side
     }
@@ -74,7 +80,11 @@ impl Player {
 
     const GHOST_ALPHA_PULSER: SinePulser = SinePulser::new(20.0, 100.0, 2.0);
 
-    pub fn draw_ghost(&self, location: &TilePos, frame: &mut Frame, time: f32) {
+    pub fn draw_ghost(&self, location: TilePos, frame: &mut Frame, time: f32) {
+        self.draw_ghost_tint(Color::WHITE, 0.0, location, frame, time);
+    }
+
+    pub fn draw_ghost_tint(&self, tint: Color, tint_amount: f32, location: TilePos, frame: &mut Frame, time: f32) {
         let color = self.side.color();
 
         let alpha_pulse = Self::GHOST_ALPHA_PULSER.pulse(time);
@@ -82,7 +92,8 @@ impl Player {
         // "Shadow"
         frame.circle(location.screen_center(), PAWN_SHADOW_RADIUS, Color::rgba(30, 30, 30, 20));
         // Pawn
-        frame.circle(location.screen_center(), PAWN_RADIUS, color.with_alpha((255.0 - alpha_pulse).max(0.0) as u8));
+        frame.circle(location.screen_center(), PAWN_RADIUS,
+                     color.tint(tint, tint_amount).with_alpha((255.0 - alpha_pulse).max(0.0) as u8));
     }
 
     /// Returns if translation was successful
@@ -100,5 +111,11 @@ impl Player {
 
     pub fn move_to(&mut self, pos: TilePos) {
         self.pos = pos;
+    }
+
+    pub fn decrement_walls(&mut self) -> Result<(), ()> {
+        self.available_walls.checked_sub(1)
+            .map(|next_val| self.available_walls = next_val)
+            .ok_or(())
     }
 }

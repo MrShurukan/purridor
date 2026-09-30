@@ -25,6 +25,28 @@ impl Direction {
             Self::Left  => (-1, 0),
         }
     }
+
+    pub const fn others(self) -> [Direction; 3] {
+        match self {
+            Direction::Up => [Direction::Left, Direction::Down, Direction::Right],
+            Direction::Right => [Direction::Left, Direction::Up, Direction::Down],
+            Direction::Left => [Direction::Right, Direction::Up, Direction::Down],
+            Direction::Down => [Direction::Left, Direction::Up, Direction::Right],
+        }
+    }
+
+    pub const fn opposite(self) -> Direction {
+        match self {
+            Self::Up    => Direction::Down,
+            Self::Right => Direction::Left,
+            Self::Down  => Direction::Up,
+            Self::Left  => Direction::Right,
+        }
+    }
+
+    pub const fn exclude_opposite(self) -> [Direction; 3] {
+        self.opposite().others()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]

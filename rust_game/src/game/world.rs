@@ -3,15 +3,18 @@ use crate::game::input::{Direction, GameInput};
 use crate::game::player::{Player, PlayerSide};
 use crate::game::tile::{Corner, Tile, TilePos};
 use crate::game::wall::{Wall, WallOrientation, WallPos};
-use crate::raylib::{get_random_value, Color, Frame};
+use crate::raylib::{Color, Frame};
 use alloc::format;
-use alloc::string::String;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::ops::{Index, IndexMut};
+
+type GS = GameState;
 
 #[derive(Debug)]
 pub enum GameState {
     // MainMenu,
-    Running(GameSubState),
+    Running(GSS),
     // GameOver,
     Error(ErrorInfo)
 }
@@ -24,11 +27,13 @@ pub struct ErrorInfo {
 
 macro_rules! error_state {
     ($message:expr) => {
-        GameState::Error(
-            ErrorInfo { message: $message.to_string(), origination: format!("{}; line: {}", module_path!(), line!()) }
-        )
+        Some(GS::Error(
+            ErrorInfo { message: $message, origination: format!("{}; line: {}", module_path!(), line!()) }
+        ))
     };
 }
+
+type GM = GameMode;
 
 pub enum GameMode {
     /// Game mode where you pass the switch to the other player once you move
@@ -38,16 +43,30 @@ pub enum GameMode {
     // Opposition
 }
 
+type GSS = GameSubState;
+
 #[derive(Debug)]
 pub enum GameSubState {
-    PlayerMove(PlayerMove),
+    PlayerTurn(PlayerMove),
     MoveTransition
 }
+
+type PM = PlayerMove;
 
 #[derive(Debug)]
 pub enum PlayerMove {
     WallPlacement{ location: WallPos, orientation: WallOrientation },
-    PlayerMovement(Option<TilePos>),
+    Movement(PMV),
+}
+
+type PMV = PlayerMoveVariant;
+
+#[derive(Debug, Clone)]
+pub enum PlayerMoveVariant {
+    /// Regular move to a selected direction.
+    Regular(Direction),
+    /// Hop over a player (you can also choose where you land)
+    PlayerHop(Direction)
 }
 
 const DEBUG_DRAW_WALL_INFO: bool = false;
@@ -65,11 +84,14 @@ pub struct Game {
     debug_message: String,
 }
 
+type WallGrid = [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM];
+type TileGrid = [Tile; TILES_DIM * TILES_DIM];
+
 pub struct World {
     game_mode: GameMode,
 
-    tiles: [Tile; TILES_DIM * TILES_DIM],
-    walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM],
+    tiles: TileGrid,
+    walls: WallGrid,
 
     players: [Player; 2],
     active_player: PlayerSide,
@@ -77,17 +99,129 @@ pub struct World {
     next_state: Option<GameState>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WallPlacementError {
     Collision,
     Overlap,
     PlayerEntrapped(PlayerSide)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegularMoveError {
+    WallBlock,
+    InvalidTarget,
+    PlayerOverlap
+}
+
 impl World {
+    /// Tries to calculate what player can do if he chooses to move (so that the choice can be valid from
+    /// the start).
+    ///
+    /// It is potentially possible player will not have a move at all. But at most 6 moves is possible
+    /// under ideal conditions
+    pub fn calculate_possible_movement(&self, player_side: PlayerSide) -> Vec<PlayerMoveVariant> {
+        let direction_priority = match player_side {
+            PlayerSide::White => [Direction::Up, Direction::Left, Direction::Right, Direction::Down],
+            PlayerSide::Black => [Direction::Down, Direction::Left, Direction::Right, Direction::Up],
+        };
+
+        // This giant filter chain yields first possible move (or None)
+        // But it's giving a priority to a regular move over
+        direction_priority.into_iter()
+            // A wall mustn't block path
+            .filter(|dir|
+                !Self::wall_blocks(self.get_player(player_side).pos(), *dir, &self.walls)
+            )
+            // It should be a move within the board
+            .filter_map(|dir|
+                self.get_player(player_side).pos().translate_dir(dir)
+                    .map(|target| (target, dir)).ok()
+            )
+            .filter_map(|(target, dir)| {
+                // If players don't overlap it's a valid position
+                if self.get_player(player_side.other()).pos() != target {
+                    return Some(PMV::Regular(dir));
+                }
+
+                // If players overlap we need to consider hopping
+                let hop = dir.exclude_opposite().into_iter()
+                    // A wall mustn't block path
+                    .filter(|dir|
+                        !Self::wall_blocks(self.get_player(player_side.other()).pos(), *dir, &self.walls)
+                    )
+                    // It should be a move within the board
+                    .filter_map(|dir|
+                        self.get_player(player_side.other()).pos().translate_dir(dir)
+                            .map(|_target| dir).ok()
+                    )
+                    .next();
+
+                if let Some(hop) = hop {
+                    return Some(PlayerMoveVariant::PlayerHop(hop));
+                }
+
+                None
+            })
+            .collect()
+    }
+
+    pub fn regular_move_possible(&self, player_side: PlayerSide, direction: Direction) -> Result<(), RegularMoveError> {
+        // Must not be blocked by a wall
+        let cur_pos = self.get_player(player_side).pos();
+        if World::wall_blocks(cur_pos, direction, &self.walls) {
+            return Err(RegularMoveError::WallBlock);
+        }
+
+        // Must be a valid target
+        let Ok(target) = cur_pos.translate_dir(direction) else {
+            return Err(RegularMoveError::InvalidTarget);
+        };
+
+        // If we land on the enemy, it's not a valid regular move
+        if target == self.get_opposing_player().pos() {
+            return Err(RegularMoveError::PlayerOverlap);
+        }
+
+        Ok(())
+    }
+
     pub fn place_wall(&mut self, pos: WallPos, orientation: WallOrientation) -> Result<(), WallPlacementError> {
         self.can_place_wall(pos, orientation)?;
 
         self.walls[pos.array_index()] = Some(Wall { pos, orientation });
+
+        Ok(())
+    }
+
+    fn place_wall_or_error(&mut self, pos: WallPos, orientation: WallOrientation) {
+        if let Err(err) = self.place_wall(pos, orientation) {
+            self.next_state = error_state!(format!("Illegal wall placement: {:?}:{:?} ({:?})", pos, orientation, err));
+            return;
+        }
+
+        if self.get_active_player_mut().decrement_walls().is_err() {
+            self.next_state = error_state!("Attempted wall placement when player is out of walls!".to_string());
+            return;
+        }
+
+        self.next_state = Some(GameState::Running(GSS::MoveTransition));
+    }
+
+    #[inline]
+    fn check_wall_overlap(
+        &self,
+        directions: &[Direction],
+        wall_orientation: WallOrientation,
+        pos: WallPos,
+    ) -> Result<(), WallPlacementError> {
+        if directions.into_iter()
+            .filter_map(|dir| pos.translate_dir(*dir).ok())
+            .filter_map(|pos| self.walls[pos.array_index()])
+            .filter(|wall| wall.orientation == wall_orientation)
+            .next()
+            .is_some() {
+            return Err(WallPlacementError::Overlap);
+        }
 
         Ok(())
     }
@@ -100,43 +234,29 @@ impl World {
         let index = pos.array_index();
 
         // 1) No wall must be present there already
-        if let Some(_) = self.walls[index] {
+        if self.walls[index].is_some() {
             return Err(WallPlacementError::Collision);
         }
 
         // 2) Walls must not collide (they are 2x1 after all)
         match orientation {
             WallOrientation::Vertical => {
-                if [Direction::Up, Direction::Down].into_iter()
-                    .filter_map(|dir| pos.translate_dir(dir).ok())
-                    .filter_map(|pos| self.walls[pos.array_index()])
-                    .filter(|wall| wall.orientation == WallOrientation::Vertical)
-                    .next()
-                    .is_some() {
-                    return Err(WallPlacementError::Overlap);
-                }
+                self.check_wall_overlap(&[Direction::Up, Direction::Down], WallOrientation::Vertical, pos)?
             },
             WallOrientation::Horizontal => {
-                if [Direction::Left, Direction::Right].into_iter()
-                    .filter_map(|dir| pos.translate_dir(dir).ok())
-                    .filter_map(|pos| self.walls[pos.array_index()])
-                    .filter(|wall| wall.orientation == WallOrientation::Horizontal)
-                    .next()
-                    .is_some() {
-                    return Err(WallPlacementError::Overlap);
-                }
+                self.check_wall_overlap(&[Direction::Left, Direction::Right], WallOrientation::Horizontal, pos)?
             },
         }
 
         // 3) Placement mustn't trap any player
-        let mut walls_copy = self.walls;
+        let mut walls_copy = self.walls.clone();
         walls_copy[index] = Some(Wall { pos, orientation });
 
         for player in self.players.iter() {
             // players must be able to reach the other end of the board
             let goal = player.side().other().start_y();
 
-            if !Self::path_available(walls_copy, player.pos, goal) {
+            if !Self::path_available(&walls_copy, player.pos(), goal) {
                 return Err(WallPlacementError::PlayerEntrapped(player.side()))
             }
         }
@@ -146,7 +266,7 @@ impl World {
 
     /// Checks if path is available from the tile to a row with a specified y level
     fn path_available(
-        walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM],
+        walls: &WallGrid,
         from: TilePos,
         to_y: usize
     ) -> bool {
@@ -157,7 +277,7 @@ impl World {
 
     fn path_available_internal(
         visited: &mut [bool; TILES_DIM * TILES_DIM],
-        walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM],
+        walls: &WallGrid,
         from: TilePos,
         to_y: usize
     ) -> bool {
@@ -194,7 +314,7 @@ impl World {
     fn wall_blocks(
         tile: TilePos,
         direction: Direction,
-        walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM]
+        walls: &WallGrid
     ) -> bool {
         match direction {
             Direction::Right =>
@@ -217,24 +337,51 @@ impl World {
     }
 
     /// Checks specified corners of a tile if they have walls in a specified orientation
+    #[inline]
     fn check_corner_walls(
         corners: &[Corner],
         orientation: WallOrientation,
         tile: TilePos,
-        walls: [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM],
+        walls: &WallGrid,
     ) -> bool {
         corners.into_iter()
             .filter_map(|corner| tile.wall_point(*corner).ok())
             .filter_map(|wall_point| walls[wall_point.array_index()])
             .any(|wall| wall.orientation == orientation)
     }
+
+    fn move_active_player(&mut self, location: TilePos) {
+        self.players[self.active_player.index()].move_to(location);
+
+        self.next_state = Some(GameState::Running(GSS::MoveTransition));
+    }
+
+    #[inline]
+    fn get_player(&self, player_side: PlayerSide) -> &Player {
+        self.players.index(player_side.index())
+    }
+
+    #[inline]
+    fn get_active_player(&self) -> &Player {
+        self.players.index(self.active_player.index())
+    }
+
+    #[inline]
+    fn get_active_player_mut(&mut self) -> &mut Player {
+        self.players.index_mut(self.active_player.index())
+    }
+
+    #[inline]
+    fn get_opposing_player(&self) -> &Player {
+        self.players.index(self.active_player.other().index())
+    }
 }
 
 impl Game {
     pub fn new() -> Self {
         Game {
-            state: GameState::Running(
-                GameSubState::PlayerMove(PlayerMove::PlayerMovement(None))
+            state: GS::Running(
+                GSS::PlayerTurn(PM::Movement(PMV::Regular(Direction::Up)))
             ),
             world: World {
                 game_mode: GameMode::Pass,
@@ -243,21 +390,7 @@ impl Game {
                     let y = index / TILES_DIM;
                     Tile::new(TilePos::new(x, y).unwrap())
                 }),
-                walls: core::array::from_fn(|index| {
-                    if get_random_value(1, 20) < 2 {
-                        let x = index % WALL_POINTS_DIM;
-                        let y = index / WALL_POINTS_DIM;
-
-                        let is_vertical = get_random_value(1, 10) <= 5;
-
-                        Some(Wall {
-                            pos: (x, y).try_into().unwrap(),
-                            orientation: if is_vertical { WallOrientation::Vertical } else { WallOrientation::Horizontal },
-                        })
-                    } else {
-                        None
-                    }
-                }),
+                walls: [None; WALL_POINTS_DIM * WALL_POINTS_DIM],
                 players: [
                     Player::new(PlayerSide::White),
                     Player::new(PlayerSide::Black)
@@ -285,8 +418,8 @@ pub const SHADOW_COLOR: Color = Color::rgba(20, 20, 20, 50);
 impl Game {
     pub fn draw(&self, input: &GameInput, frame: &mut Frame) {
         match &self.state {
-            GameState::Running(sub_state) => self.draw_running(input, sub_state, frame),
-            GameState::Error(info) => self.draw_error(info, frame),
+            GS::Running(sub_state) => self.draw_running(input, sub_state, frame),
+            GS::Error(info) => self.draw_error(info, frame),
         }
     }
 
@@ -298,8 +431,22 @@ impl Game {
         frame.const_text(c"Press ZL + Minus to reset.", (100, 400).into(), 24, Color::BLUE)
     }
 
-    fn get_player(&self, player_side: &PlayerSide) -> &Player {
-        self.world.players.index(player_side.index())
+    #[inline]
+    fn get_player(&self, player_side: PlayerSide) -> &Player {
+        self.world.get_player(player_side)
+    }
+
+    #[inline]
+    fn get_active_player(&self) -> &Player {
+        self.world.get_active_player()
+    }
+
+    #[inline]
+    fn get_active_player_mut(&mut self) -> &mut Player { self.world.get_active_player_mut() }
+
+    #[inline]
+    fn get_opposing_player(&self) -> &Player {
+        self.world.get_opposing_player()
     }
 
     fn draw_running(&self, input: &GameInput, sub_state: &GameSubState, frame: &mut Frame) {
@@ -330,34 +477,42 @@ impl Game {
                 frame.const_text(c"White", (10, y).into(), 24, Color::WHITE);
                 frame.const_text_right_align(c"Black", 24, SCREEN_WIDTH, 10, y as i32, Color::WHITE);
 
-                Wall::draw_ui_walls(self.get_player(&PlayerSide::White).available_walls, PlayerSide::White, frame);
-                Wall::draw_ui_walls(self.get_player(&PlayerSide::Black).available_walls, PlayerSide::Black, frame);
+                Wall::draw_ui_walls(self.get_player(PlayerSide::White).available_walls(), PlayerSide::White, frame);
+                Wall::draw_ui_walls(self.get_player(PlayerSide::Black).available_walls(), PlayerSide::Black, frame);
             }
         }
 
-        // PlayerMove specific draw
+        // PlayerTurn specific draw
         match sub_state {
-            GameSubState::PlayerMove(player_move) => {
-                match player_move {
-                    PlayerMove::PlayerMovement(location) => {
-                        // Draw a ghost version of the current player
-                        if let Some(location) = location {
-                            self.get_player(&self.world.active_player).draw_ghost(location, frame, self.elapsed_time);
-                        }
-                    }
-                    PlayerMove::WallPlacement { location, orientation } => {
-                        // Draw a ghost version of the new wall
-                        Wall::draw_ghost(
-                            frame,
-                            *location,
-                            *orientation,
-                            self.world.can_place_wall(*location, *orientation).is_ok(),
-                            self.elapsed_time
-                        );
-                    }
+            GSS::PlayerTurn(PM::Movement(PMV::Regular(direction))) => {
+                let target = self.get_active_player()
+                    .pos().translate_dir(*direction);
+
+                // Draw a ghost version of the current player
+                if let Ok(target) = target {
+                    self.get_active_player().draw_ghost(target, frame, self.elapsed_time);
                 }
-            }
-            GameSubState::MoveTransition => {}
+            },
+            GSS::PlayerTurn(PM::Movement(PMV::PlayerHop(direction))) => {
+                let target = self.get_opposing_player()
+                    .pos().translate_dir(*direction);
+
+                // Draw a ghost of the target
+                if let Ok(target) = target {
+                    self.get_active_player().draw_ghost(target, frame, self.elapsed_time);
+                }
+            },
+            GSS::PlayerTurn(PM::WallPlacement { location, orientation }) => {
+                // Draw a ghost version of the new wall
+                Wall::draw_ghost(
+                    frame,
+                    *location,
+                    *orientation,
+                    self.world.can_place_wall(*location, *orientation).is_ok(),
+                    self.elapsed_time
+                );
+            },
+            GSS::MoveTransition => {}
         }
 
         // =================== Debug ===================
@@ -404,11 +559,10 @@ impl Game {
         }
     }
 
-    pub fn update(mut self, input: &GameInput, dt: f32) -> Self {
+    pub fn update(&mut self, input: &GameInput, dt: f32) {
         // Global state transition check
-        if let Some(state) = self.world.next_state {
+        if let Some(state) = self.world.next_state.take() {
             self.state = state;
-            self.world.next_state = None;
         }
 
         self.elapsed_time += dt;
@@ -416,38 +570,31 @@ impl Game {
         // Reset Logic
         if input.reset {
             self.reset();
-            return self;
         }
 
         let state = &mut self.state;
         let world = &mut self.world;
 
         match state {
-            GameState::Running(sub_state) => {
-                sub_state.update(input, world);
-            }
-
-            GameState::Error(_) => {}
-        }
-
-        self
-    }
-}
-
-impl GameSubState {
-    fn update(
-        &mut self,
-        input: &GameInput,
-        world: &mut World,
-    ) {
-        match self {
-            Self::PlayerMove(player_move) => {
+            GS::Running(GSS::PlayerTurn(player_move)) => {
                 player_move.update(input, world);
-            }
+            },
 
-            Self::MoveTransition => {
-                // ...
-            }
+            GS::Running(GSS::MoveTransition) => {
+                // Potential animations may be played here
+                // Victory conditions also should go here
+
+                world.active_player = world.active_player.other();
+
+                if let Some(possible) = world.calculate_possible_movement(world.active_player).first() {
+                    *state = GS::Running(GSS::PlayerTurn(PM::Movement(possible.clone())));
+                }
+                else {
+                    *state = error_state!(format!("Player {:?} has no legal moves", world.active_player)).unwrap();
+                }
+            },
+
+            GS::Error(_) => {}
         }
     }
 }
@@ -455,19 +602,32 @@ impl GameSubState {
 impl PlayerMove {
     fn switch(&mut self, world: &mut World) {
         *self = match self {
-            PlayerMove::PlayerMovement(_) => {
-                let other_player = &world.players[world.active_player.other().index()];
-                let location = WallPos::closest_point(other_player.pos);
+            PM::Movement(_) => {
+                // Forbid the switch if the walls are lacking
+                // TODO: Maybe highlight it somehow
+                if world.get_active_player().available_walls() == 0 {
+                    return;
+                }
+
+                let other_player = world.get_opposing_player();
+                let location = WallPos::closest_point(other_player.pos());
                 let orientation = WallOrientation::Horizontal;
 
-                PlayerMove::WallPlacement {
+                PM::WallPlacement {
                     location,
                     orientation
                 }
             }
 
-            PlayerMove::WallPlacement { .. } => {
-                PlayerMove::PlayerMovement(None)
+            PM::WallPlacement { .. } => {
+                if let Some(possible) = world.calculate_possible_movement(world.active_player).first() {
+                    PM::Movement(possible.clone())
+                }
+                // In theory there might be no legal move, in which case we simply forbid the switch
+                // TODO: What if the player is out of walls too?
+                else {
+                    return;
+                }
             }
         }
     }
@@ -481,23 +641,100 @@ impl PlayerMove {
             self.switch(world);
         }
 
-        let player = &mut world.players[world.active_player.index()];
-
-        // Inputting a choice
+        // Checking for player pressing direction keys
+        // Movement is complicated as it can change subtypes on the fly, for example
+        // select the square occupied by the enemy and you morph into hop mode
         match self {
-            PlayerMove::PlayerMovement(location) => 'block: {
+            PM::Movement(PMV::Regular(_)) => 'block: {
                 let Some(direction) = input.direction else {
                     break 'block;
                 };
 
-                let new_location = player.pos.translate_dir(direction);
+                match world.regular_move_possible(world.active_player, direction) {
+                    Ok(_) => {
+                        *self = PM::Movement(PMV::Regular(direction));
+                    },
+                    // We need to try hopping
+                    Err(RegularMoveError::PlayerOverlap) => {
+                        let potential_hops: Vec<Direction> =
+                            world.calculate_possible_movement(world.active_player)
+                                .into_iter()
+                                .filter_map(|move_variant| {
+                                    if let PMV::PlayerHop(dir) = move_variant {
+                                        Some(dir)
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
 
-                if let Ok(new_location) = new_location {
-                    *location = Some(new_location);
+                        // If there are no hops, just void the input
+                        if potential_hops.is_empty() {
+                            break 'block;
+                        }
+
+                        // Try to maintain the direction player is facing now
+                        // (i.e. try to jump over the enemy in a straight line)
+                        if potential_hops.iter().any(|dir| *dir == direction) {
+                            *self = PM::Movement(PMV::PlayerHop(direction));
+                        }
+                        // Get any that popped up in the search otherwise
+                        else {
+                            *self = PM::Movement(PMV::PlayerHop(*potential_hops.first().unwrap()));
+                        }
+                    },
+                    // Void the input otherwise
+                    Err(_) => {}
                 }
-            }
+            },
 
-            PlayerMove::WallPlacement {
+            // All invalid input here try to fall back to regular move in that direction
+            // Otherwise the input is voided
+            PM::Movement(PMV::PlayerHop(prev_dir)) => 'block: {
+                let Some(direction) = input.direction else {
+                    break 'block;
+                };
+
+                // If the direction matches what we already had then player wants to switch back
+                // to regular movement
+                if *prev_dir == direction {
+                    if world.regular_move_possible(world.active_player, direction).is_ok() {
+                        *self = PM::Movement(PMV::Regular(direction));
+                    }
+                    break 'block;
+                }
+
+                // Calculating from the other player position
+                let other_pos = world.get_opposing_player().pos();
+                // Must not be blocked by a wall
+                if World::wall_blocks(other_pos, direction, &world.walls) {
+                    if world.regular_move_possible(world.active_player, direction).is_ok() {
+                        *self = PM::Movement(PMV::Regular(direction));
+                    }
+                    break 'block;
+                }
+
+                // Must be a valid target
+                let Ok(target) = other_pos.translate_dir(direction) else {
+                    if world.regular_move_possible(world.active_player, direction).is_ok() {
+                        *self = PM::Movement(PMV::Regular(direction));
+                    }
+                    break 'block;
+                };
+
+                // We can't jump back to ourselves
+                if target == world.get_active_player().pos() {
+                    if world.regular_move_possible(world.active_player, direction).is_ok() {
+                        *self = PM::Movement(PMV::Regular(direction));
+                    }
+                }
+                // Otherwise, it's a valid hop
+                else {
+                    *self = PM::Movement(PMV::PlayerHop(direction));
+                }
+            },
+
+            PM::WallPlacement {
                 location,
                 orientation,
             } => 'block: {
@@ -523,15 +760,26 @@ impl PlayerMove {
         }
 
         match self {
-            PlayerMove::PlayerMovement(Some(location)) => {
-                // TODO: world.move_player(player.side(), *location);
-                player.move_to(*location);
+            PM::Movement(PMV::Regular(dir)) => {
+                let Ok(target) = world.get_active_player().pos().translate_dir(*dir) else {
+                    world.next_state = error_state!("Out of bounds regular move attempted".to_string());
+                    return;
+                };
+
+                world.move_active_player(target);
             },
-            PlayerMove::PlayerMovement(None) => {
-                // TODO: Show a notification prompting that you need to select a direction first
-            }
-            PlayerMove::WallPlacement { location, orientation, .. } => {
-                let _ = world.place_wall(*location, *orientation);
+            PM::Movement(PMV::PlayerHop(dir)) => {
+                let Ok(target) = world.get_opposing_player().pos().translate_dir(*dir) else {
+                    world.next_state = error_state!("Out of bounds hop attempted".to_string());
+                    return;
+                };
+
+                world.move_active_player(target);
+            },
+            PM::WallPlacement { location, orientation, .. } => {
+                if world.can_place_wall(*location, *orientation).is_ok() {
+                    world.place_wall_or_error(*location, *orientation);
+                }
             }
         }
     }

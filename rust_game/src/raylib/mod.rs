@@ -236,7 +236,13 @@ impl Color {
     /// Tints the color by a percentage (0 -> 1),
     /// where 0 is base color and 1 means fully tint_color.
     /// Doesn't affect alpha
+    ///
+    /// Also is not a real tint per se, but works good enough
     pub const fn tint(self, tint_color: Color, amount: f32) -> Self {
+        if amount == 0.0 {
+            return self;
+        }
+
         Self {
             r: lerp_u8(self.r, tint_color.r, amount),
             g: lerp_u8(self.g, tint_color.g, amount),

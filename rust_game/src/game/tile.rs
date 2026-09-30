@@ -120,6 +120,21 @@ impl TilePos {
             },
         }
     }
+    
+    /// Returns none if two tiles aren't adjacent (diagonals are not allowed)
+    pub fn adjacent_direction(self, other: TilePos) -> Option<Direction> {
+        let dx = other.x as i32 - self.x as i32;
+        let dy = other.y as i32 - self.y as i32;
+        
+        match (dx, dy) {
+            (-1, 0) => Some(Direction::Left),
+            (1,  0) => Some(Direction::Right),
+            (0, -1) => Some(Direction::Up),
+            (0,  1) => Some(Direction::Down),
+            
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
