@@ -274,6 +274,59 @@ impl Color {
 }
 
 // ============================================================
+// Texture2D
+// ============================================================
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct Texture2D {
+    pub id: u32,
+    pub width: c_int,
+    pub height: c_int,
+    pub mipmaps: c_int,
+    pub format: c_int,
+}
+
+pub struct Texture {
+    raw: Texture2D,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TextureError {
+    LoadFailed,
+}
+
+impl Texture {
+    pub fn load(path: &CStr) -> Result<Self, TextureError> {
+        let raw = unsafe {
+            sys::LoadTexture(path.as_ptr())
+        };
+
+        if raw.id == 0 {
+            Err(TextureError::LoadFailed)
+        } else {
+            Ok(Self { raw })
+        }
+    }
+
+    pub const fn width(&self) -> i32 {
+        self.raw.width
+    }
+
+    pub const fn height(&self) -> i32 {
+        self.raw.height
+    }
+}
+
+impl Drop for Texture {
+    fn drop(&mut self) {
+        unsafe {
+            sys::UnloadTexture(self.raw);
+        }
+    }
+}
+
+// ============================================================
 // Input
 // ============================================================
 
@@ -653,6 +706,35 @@ impl Frame<'_> {
         let x = right_align_border as i32 - self.measure_const_text(&text, size) - horizontal_offset;
 
         self.const_text(&text, (x, y).into(), size, color)
+    }
+
+    pub fn texture(
+        &mut self,
+        texture: &Texture,
+        position: Vec2
+    ) {
+        unsafe {
+            sys::DrawTextureV(
+                texture.raw,
+                position,
+                Color::WHITE,
+            );
+        }
+    }
+
+    pub fn texture_tint(
+        &mut self,
+        texture: &Texture,
+        position: Vec2,
+        tint: Color,
+    ) {
+        unsafe {
+            sys::DrawTextureV(
+                texture.raw,
+                position,
+                tint,
+            );
+        }
     }
 }
 

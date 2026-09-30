@@ -3,7 +3,7 @@
 
 use core::ffi::{c_char, c_float, c_int};
 
-use super::{Color, Rect, Vec2};
+use super::{Color, Rect, Texture2D, Vec2};
 
 unsafe extern "C" {
     // Window
@@ -55,6 +55,21 @@ unsafe extern "C" {
         center: Vec2,
         radius: f32,
         color: Color,
+    );
+
+    // Texture2D
+    pub fn LoadTexture(
+        file_name: *const c_char,
+    ) -> Texture2D;
+
+    pub fn UnloadTexture(
+        texture: Texture2D,
+    );
+
+    pub fn DrawTextureV(
+        texture: Texture2D,
+        position: Vec2,
+        tint: Color,
     );
 
     // Text

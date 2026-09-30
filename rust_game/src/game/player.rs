@@ -1,3 +1,5 @@
+use alloc::string::{String, ToString};
+use core::ffi::CStr;
 use crate::game::tile::TilePos;
 use crate::game::util::SinePulser;
 use crate::game::world::TILES_DIM;
@@ -8,6 +10,9 @@ pub enum PlayerSide {
     White,
     Black,
 }
+
+const WHITE_NAME: &CStr = c"Koska's move";
+const BLACK_NAME: &CStr = c"Svechka's move";
 
 impl PlayerSide {
     pub const fn index(self) -> usize {
@@ -37,6 +42,13 @@ impl PlayerSide {
             PlayerSide::Black => 0
         }
     }
+
+    pub const fn move_string(self) -> &'static CStr {
+        match self {
+            PlayerSide::White => WHITE_NAME,
+            PlayerSide::Black => BLACK_NAME,
+        }
+    }
 }
 
 pub struct Player {
@@ -55,7 +67,7 @@ impl Player {
             pos: TilePos::new(4, side.start_y()).unwrap(),
 
             side,
-            available_walls: 20,
+            available_walls: 10,
         }
     }
 

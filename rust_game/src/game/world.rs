@@ -3,7 +3,7 @@ use crate::game::input::{Direction, GameInput};
 use crate::game::player::{Player, PlayerSide};
 use crate::game::tile::{Corner, Tile, TilePos};
 use crate::game::wall::{Wall, WallOrientation, WallPos};
-use crate::raylib::{Color, Frame};
+use crate::raylib::{Color, Frame, Texture, TextureError};
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -70,11 +70,32 @@ pub enum PlayerMoveVariant {
 }
 
 const DEBUG_DRAW_WALL_INFO: bool = false;
-const DEBUG_PLAYER_INFO: bool = true;
+const DEBUG_PLAYER_INFO: bool = false;
 pub const TILES_DIM: usize = 9;
 /// Walls are 2x1, which means you can place them in between two tiles
 /// Also it's pointless to put it on the edges, so we forbid that by shrinking the grid
 pub const WALL_POINTS_DIM: usize = TILES_DIM - 1;
+
+pub struct Assets {
+    pub white_avatar: Texture,
+    pub black_avatar: Texture,
+}
+
+impl Assets {
+    pub fn load() -> Result<Self, TextureError> {
+        Ok(Self {
+            white_avatar:
+                Texture::load(
+                    c"romfs:/textures/koska.png"
+                )?,
+
+            black_avatar:
+                Texture::load(
+                    c"romfs:/textures/svechka.png"
+                )?,
+        })
+    }
+}
 
 pub struct Game {
     state: GameState,
@@ -82,6 +103,8 @@ pub struct Game {
 
     elapsed_time: f32,
     debug_message: String,
+
+    assets: Assets,
 }
 
 type WallGrid = [Option<Wall>; WALL_POINTS_DIM * WALL_POINTS_DIM];
@@ -402,6 +425,8 @@ impl Game {
             elapsed_time: 0.0,
 
             debug_message: String::new(),
+
+            assets: Assets::load().unwrap(),
         }
     }
 
@@ -473,12 +498,32 @@ impl Game {
         // UI
         match self.world.game_mode {
             GameMode::Pass => {
+                // Walls
                 let y = SCREEN_HEIGHT - 80;
                 frame.const_text(c"White", (10, y).into(), 24, Color::WHITE);
                 frame.const_text_right_align(c"Black", 24, SCREEN_WIDTH, 10, y as i32, Color::WHITE);
 
                 Wall::draw_ui_walls(self.get_player(PlayerSide::White).available_walls(), PlayerSide::White, frame);
                 Wall::draw_ui_walls(self.get_player(PlayerSide::Black).available_walls(), PlayerSide::Black, frame);
+
+                // Turn
+                let y = 10;
+                let x = 10;
+                frame.const_text(self.world.active_player.move_string(), (x, y).into(), 24, Color::WHITE);
+
+                let avatar = match self.world.active_player {
+                    PlayerSide::White => &self.assets.white_avatar,
+                    PlayerSide::Black => &self.assets.black_avatar,
+                };
+                frame.texture(avatar, (x, y + 40).into());
+
+                // Help
+                let y = 10;
+                frame.const_text_right_align(c"Help:", 24, SCREEN_WIDTH, 10, y, Color::WHITE);
+                frame.const_text_right_align(       c"Move: dpad", 24, SCREEN_WIDTH, 10, y + 40, Color::WHITE);
+                frame.const_text_right_align(c"Switch mode:  L/R", 24, SCREEN_WIDTH, 10, y + 60, Color::WHITE);
+                frame.const_text_right_align(    c"Confirm:     A", 24, SCREEN_WIDTH, 10, y + 80, Color::WHITE);
+                frame.const_text_right_align(c"Rotate wall:     B", 24, SCREEN_WIDTH, 10, y + 100, Color::WHITE);
             }
         }
 
@@ -643,7 +688,7 @@ impl PlayerMove {
 
         // Checking for player pressing direction keys
         // Movement is complicated as it can change subtypes on the fly, for example
-        // select the square occupied by the enemy and you morph into hop mode
+        // select the square occupied by the enemy - and you morph into hop mode
         match self {
             PM::Movement(PMV::Regular(_)) => 'block: {
                 let Some(direction) = input.direction else {
